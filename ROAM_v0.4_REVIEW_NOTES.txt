@@ -1,0 +1,48 @@
+ROAM v0.4 -- Reviewed source and connection fixes
+================================================
+
+Source: user's Roam_v0.3_iOS RAR uploaded 26 October 2026.
+Based on Locus source under MIT; LICENSE and vendor files are preserved.
+This build is based on v0.3 and is NOT YET COMPILED or tested on an iPhone.
+
+WHAT WAS FIXED:
+1) Roam registered roam:// but LocalDevVPN was asked to return to locus://.
+   The VPN enable URL now requests scheme=roam, so return navigation should target Roam.
+   Whether LocalDevVPN accepts that callback must be confirmed on iPhone.
+2) The pairing-file custom type identifier now matches Roam's Info.plist.
+3) The tunnel-create error no longer incorrectly implies that LocalDevVPN
+   itself is necessarily disconnected when a cellular developer tunnel fails.
+4) The VPN indicator in Settings is labelled interface detected/not detected:
+   this cannot prove the Apple developer service is reachable.
+5) Two pairing instructions and two LiveContainer references use the Roam name.
+6) Corrected a GPX file type identifier typo in Info.plist.
+7) Updated source and existing Xcode project marketing version to 0.4.0 and build 4.
+
+NOT CHANGED:
+- The location engine's FFI calls, session lifecycle, joystick, and routing.
+- Cellular-only new teleport: not solved or promised.
+- Roam's v0.1 interface was NOT merged; this remains the Locus-derived UI.
+- The existing app icon may still be from Locus.
+- Original Locus installation and v0.1 / v0.2 / v0.3 directories.
+
+IMPORTANT OBSERVATIONS:
+- SpoofSession updates call the FFI synchronously from the main actor;
+  this could make the interface stutter if tunnel I/O stalls. Refactor
+  cautiously after the first Xcode build and runtime measurements.
+- isSessionActive checks for a non-nil handle; it does not independently
+  validate tunnel health over mobile data.
+- VPN interface detection by its 10.7.0.x address is not a proof of
+  developer-service connectivity.
+- Apple's iOS and third-party-app changes can affect whether any method works.
+
+WHEN A MAC IS AVAILABLE:
+1. Copy Roam_v0.4_iOS to the Mac; install Xcode and XcodeGen.
+2. In project directory: xcodegen generate ; open Locus.xcodeproj.
+3. Select the Locus scheme (internal name), set your signing team, build.
+4. Verify LocalDevVPN returns to Roam after connect.
+5. Pair Roam separately (the separate bundle ID has a separate sandbox).
+6. Wi-Fi teleport -> Maps -> switch to 5G -> joystick walking/driving.
+7. Try a fresh 5G teleport; EXPECT it may fail, log error accurately.
+8. Do not remove your working Locus app until Roam is independently verified.
+
+DO NOT upload pairing files or certificates to public sites/repositories.

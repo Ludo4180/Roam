@@ -1,0 +1,50 @@
+ROAM v0.5 - INTERFACE DESIGN & TEST NOTES
+========================================
+
+Palette: midnight #0A1F3D, electric blue #3B82FF, turquoise #14E0D2.
+Tagline: BE ANYWHERE. Main UI uses SF Pro (system fonts).
+The iPhone app icon is a crop from the user's approved Roam brand-board artwork.
+This is a prototype raster crop, not an original high-resolution vector icon.
+
+NEW UI COMPONENTS
+-----------------
+- RootView.swift: branded RoamMark, status card, dark bottom dock with
+  walk/run/cycle/drive mode chips, joystick, teleport/stop, favourites and settings.
+- MapHomeView.swift: compact Roam header with network indicator; destination
+  search, search results and map actions; native Apple Maps stays interactive.
+- Theme.swift: consistent Roam palette, dark-surface styling and colour tokens.
+- SettingsView.swift: Roam v0.5 version text and streamlined About section.
+- AppIcon.png + AccentColor: user-approved Roam icon crop and turquoise accent.
+- Xcode project: version 0.5.0; disables older Locus Icon Composer package
+  from build references so the branded asset-catalog icon is selected.
+
+NOT CHANGED
+-----------
+- DeviceTunnel.swift, LocationEngine.swift and SpoofSession.swift
+- The idevice FFI library, developer pairing logic and VPN callback handling
+- Joystick movement algorithm and route simulation
+- The known Wi-Fi requirement to initiate new teleports (not solved)
+
+TECHNICAL LIMITS
+----------------
+- This source passes Swift parser checks on the authoring machine, but cannot
+  be type-checked against SwiftUI/MapKit or compiled without Xcode on macOS.
+- LocalDevVPN detected means an interface was found, NOT confirmation that
+  the Apple developer tunnel is reachable. VPNs may mask underlying 5G/Wi-Fi.
+- The existing Locus GPS engine is still untested in Roam. Keep Locus installed.
+- On-device pairing may need to be repeated for the new Roam bundle ID.
+- Some advanced setup/detail screens still use original Locus-derived layout.
+
+MAC TESTING WHEN AVAILABLE
+--------------------------
+1. Copy Roam_v0.5_iOS to a Mac with Xcode + XcodeGen installed.
+2. Run 'xcodegen generate' in project folder, then open Locus.xcodeproj.
+3. Select the Locus scheme (internal scheme name); choose signing team.
+4. Build, correct any SwiftUI or project issues, install on iPhone.
+5. Check portrait layout on iPhone 17 Pro, search, favourite, and mode chips.
+6. Verify LocalDevVPN opens/returns correctly and pair Roam separately.
+7. Test Wi-Fi teleport -> Apple Maps -> 5G joystick walk/drive.
+8. Keep Locus installed until Roam passes independently.
+
+Source lineage: Locus MIT, copyright retained in the project LICENSE file.
+Do not upload pairing files, device secrets, provisioning profiles or keys.

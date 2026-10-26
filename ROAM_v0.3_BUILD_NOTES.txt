@@ -1,0 +1,30 @@
+Roam v0.3 -- Connection status integration
+========================================
+
+This project was copied from Roam v0.2, then updated in place.
+
+Changes:
+* Live network-route classification (Wi-Fi / cellular / other-VPN / offline)
+  displayed beneath the existing map status bar.
+* Shows the existing SpoofSession status (not spoofing / starting / spoofing / etc).
+* Adds a brief reminder that a fresh teleport may require Wi-Fi.
+* Changes the session-drop notification title to Roam.
+* Preserves LocationEngine.swift, DeviceTunnel.swift, pairing, joystick and
+  route logic unchanged.
+
+IMPORTANT:
+* The network indicator is NOT proof that LocalDevVPN or the developer
+  location tunnel is connected. A VPN may make the network appear as Other.
+* Cellular-only first teleport is NOT implemented here.
+* Not compiled or tested on an iPhone yet. Build on macOS in Xcode.
+* You can revert by using Roam_v0.2_iOS; it has NOT been edited.
+
+Mac build:
+* Install Xcode and XcodeGen.
+* In this directory run: xcodegen generate
+* Open the generated Locus.xcodeproj (the internal project target may still
+  be named Locus even when the app display name is Roam).
+* Select your Apple Development Team in Signing & Capabilities.
+* Build and test on a physical iPhone; compare the GPS engine with Locus.
+
+License: MIT -- retain the upstream LICENSE file and copyright notices.
