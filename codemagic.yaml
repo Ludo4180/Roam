@@ -1,0 +1,29 @@
+workflows:
+  roam-ios-unsigned:
+    name: Roam v0.6 - unsigned compile check
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+    scripts:
+      - name: Verify Roam project files
+        script: |
+          set -eu
+          test -f Locus.xcodeproj/project.pbxproj
+          test -f Vendor/idevice/libidevice_ffi.a
+          xcodebuild -version
+          xcodebuild -list -project Locus.xcodeproj
+      - name: Compile Roam for iPhone without code signing
+        script: |
+          set -o pipefail
+          xcodebuild \
+            -project Locus.xcodeproj \
+            -scheme Locus \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$CM_BUILD_DIR/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$CM_BUILD_DIR/roam-build.log"
+    artifacts:
+      - roam-build.log
+      - DerivedData/Build/Products/Debug-iphoneos/*.app
