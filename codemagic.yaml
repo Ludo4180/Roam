@@ -19,11 +19,11 @@ workflows:
           xcodebuild \
             -project Locus.xcodeproj \
             -scheme Locus \
-            -configuration Debug \
+            -configuration Release \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$CM_BUILD_DIR/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tee "$CM_BUILD_DIR/roam-build.log"
     artifacts:
       - roam-build.log
-      - DerivedData/Build/Products/Debug-iphoneos/*.app
+      - DerivedData/Build/Products/Release-iphoneos/*.app
