@@ -1,4 +1,5 @@
 import SwiftUI
+import Network
 import UniformTypeIdentifiers
 
 struct SettingsView: View {
@@ -6,6 +7,8 @@ struct SettingsView: View {
     @EnvironmentObject private var session: SpoofSession
     @Environment(\.dismiss) private var dismiss
 
+    @State private var probeResult = "Not tested"
+    @State private var probeConnection: NWConnection?
     @State private var showImporter = false
     @State private var showPairOnDevice = false
     @State private var tunnelIP = TunnelConfig.targetIP
@@ -77,6 +80,15 @@ struct SettingsView: View {
                     Button("Save tunnel IP") {
                         TunnelConfig.setTargetIP(tunnelIP)
                     }
+                    Button("Test developer endpoint (TCP 49152)") {
+                        TunnelConfig.setTargetIP(tunnelIP)
+                        testDeveloperEndpoint()
+                    }
+                    LabeledContent("Endpoint diagnostic", value: probeResult)
+                        .font(.footnote)
+                    Text("This checks TCP reachability only, not developer pairing or GPS simulation. Test once with cellular off, then again with cellular on.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Button {
                         if localDevVPNInstalled {
                             LocalDevVPN.openInstalled()
@@ -145,6 +157,41 @@ struct SettingsView: View {
                     localDevVPNInstalled = LocalDevVPN.isInstalled
                 }
             }
+        }
+    }
+
+    private func testDeveloperEndpoint() {
+        probeConnection?.cancel()
+        probeResult = "Testing…"
+        guard let port = NWEndpoint.Port(rawValue: 49152) else {
+            probeResult = "Invalid port"
+            return
+        }
+        let connection = NWConnection(host: NWEndpoint.Host(tunnelIP), port: port, using: .tcp)
+        probeConnection = connection
+        connection.stateUpdateHandler = { state in
+            DispatchQueue.main.async {
+                guard self.probeConnection === connection else { return }
+                switch state {
+                case .ready:
+                    self.probeResult = "TCP reachable"
+                    connection.cancel()
+                    self.probeConnection = nil
+                case .failed(let error):
+                    self.probeResult = "TCP failed: \(error.localizedDescription)"
+                    connection.cancel()
+                    self.probeConnection = nil
+                default:
+                    break
+                }
+            }
+        }
+        connection.start(queue: DispatchQueue(label: "roam.endpoint.diagnostic"))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            guard self.probeConnection === connection else { return }
+            self.probeResult = "TCP timed out (5 seconds)"
+            connection.cancel()
+            self.probeConnection = nil
         }
     }
 }
