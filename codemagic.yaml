@@ -1,6 +1,6 @@
 workflows:
   roam-ios-unsigned:
-    name: Roam v0.6 - unsigned compile check
+    name: Roam v0.7 - unsigned diagnostic compile check
     max_build_duration: 60
     instance_type: mac_mini_m2
     environment:
