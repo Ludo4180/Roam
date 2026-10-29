@@ -1,19 +1,20 @@
 workflows:
   roam-ios-unsigned:
-    name: Roam v0.7 - unsigned diagnostic compile check
+    name: Roam v0.8 - cellular tunnel research (Release)
     max_build_duration: 60
     instance_type: mac_mini_m2
     environment:
       xcode: latest
     scripts:
-      - name: Verify Roam project files
+      - name: Check Roam source and build environment
         script: |
           set -eu
           test -f Locus.xcodeproj/project.pbxproj
+          test -f Locus/Features/Settings/CellularResearchView.swift
           test -f Vendor/idevice/libidevice_ffi.a
           xcodebuild -version
           xcodebuild -list -project Locus.xcodeproj
-      - name: Compile Roam for iPhone without code signing
+      - name: Build iPhone Release app without code signing
         script: |
           set -o pipefail
           xcodebuild \
@@ -24,6 +25,14 @@ workflows:
             -derivedDataPath "$CM_BUILD_DIR/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tee "$CM_BUILD_DIR/roam-build.log"
+      - name: Verify output version and app structure
+        script: |
+          set -eu
+          APP="$CM_BUILD_DIR/DerivedData/Build/Products/Release-iphoneos/Roam.app"
+          test -d "$APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist"
+          test -f "$APP/Roam"
     artifacts:
       - roam-build.log
       - DerivedData/Build/Products/Release-iphoneos/*.app

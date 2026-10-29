@@ -1,0 +1,4 @@
+Scenario,LocalDevVPN,Wi-Fi,Mobile data,TCP 10.7.0.1,TCP 127.0.0.1,TCP ::1,Paired handshake 10.7.0.1,Paired handshake 127.0.0.1,Notes
+Baseline,Connected,On,On,,,,,,
+Cellular only,Connected,Off,On,,,,,,
+Optional Wi-Fi return,Connected,On,On,,,,,,

@@ -82,6 +82,9 @@ final class SpoofSession: ObservableObject {
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
 
+    // v0.9: opt-in only. Silent automatic sends obscured the cellular transition
+    // experiment and could trigger teardown of a working simulation.
+    private let automaticRetriesEnabled = false
     private var resendTimer: Timer?
     private var healthTimer: Timer?
     private var joystickTimer: Timer?
@@ -307,14 +310,20 @@ final class SpoofSession: ObservableObject {
             lastError = nil
             beginBackground()
             locationKeeper.start()
-            startResend(pairing: pairing)
-            startHealth(pairing: pairing)
+            if automaticRetriesEnabled {
+                startResend(pairing: pairing)
+                startHealth(pairing: pairing)
+            }
             if markRecent {
                 pushRecent(coordinate)
             }
         case .failure(let error):
             lastError = error.localizedDescription
             if simulated != nil {
+                stopJoystick()
+                routeTask?.cancel()
+                stopResend()
+                stopHealth()
                 status = .dropped(error.localizedDescription)
                 postDropNotification(error.localizedDescription)
             } else {

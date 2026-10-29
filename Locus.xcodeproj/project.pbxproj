@@ -12,6 +12,7 @@
 		1CBCD6A08AA473AB0CB526CA /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EA9F9A2A821575AEE768E67 /* Theme.swift */; };
 		2D719677D77D851D73D2BA60 /* PairingDocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E6BE765DFC4FB848609C8AA /* PairingDocumentPicker.swift */; };
 		39FCB8C0E7050B9161E600C6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E1C1367D937C33DF4F1FBE6 /* SettingsView.swift */; };
+		A813F57ED81A00B371A80001 /* CellularResearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A813F57ED81A00B371A80002 /* CellularResearchView.swift */; };
 		3F84179EF76E8AA074797361 /* SavedPlace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 799094E9B1F051BEAD82D2C1 /* SavedPlace.swift */; };
 		41622C4D112CF14318210A71 /* PairOnDeviceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2BC5277FD75A01A31B9830D /* PairOnDeviceService.swift */; };
 		4A19A245C3B57EB4E5B02CDE /* DeviceTunnel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91E2EBD3F6F937176E4EC13F /* DeviceTunnel.swift */; };
@@ -36,6 +37,7 @@
 /* Begin PBXFileReference section */
 		03DE64DA7097F210F1075553 /* LocusApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocusApp.swift; sourceTree = "<group>"; };
 		0E1C1367D937C33DF4F1FBE6 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A813F57ED81A00B371A80002 /* CellularResearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CellularResearchView.swift; sourceTree = "<group>"; };
 		1FC0C702516F159A7EF6D853 /* RouteBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouteBuilder.swift; sourceTree = "<group>"; };
 		21D5BB24B768AA010AB8CD40 /* module.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = module.modulemap; sourceTree = "<group>"; };
 		2D4CA41C622A34E45EF21F54 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -71,6 +73,7 @@
 				361C48381EA09BB299BD110E /* LocusEasterEggView.swift */,
 				BE84038C9223A84BAFFAE233 /* PairOnDeviceView.swift */,
 				0E1C1367D937C33DF4F1FBE6 /* SettingsView.swift */,
+				A813F57ED81A00B371A80002 /* CellularResearchView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -301,6 +304,7 @@
 				87B0D41458D6AF0D39C9AAA4 /* RoutePlannerSheet.swift in Sources */,
 				3F84179EF76E8AA074797361 /* SavedPlace.swift in Sources */,
 				39FCB8C0E7050B9161E600C6 /* SettingsView.swift in Sources */,
+				A813F57ED81A00B371A80001 /* CellularResearchView.swift in Sources */,
 				F42C461AA339262E17E26A10 /* SetupFlowView.swift in Sources */,
 				F8A8DEF1249AB260C4FF901A /* SilentAudioKeepAlive.swift in Sources */,
 				EA7795A0D36F3F0AFA464944 /* SpoofSession.swift in Sources */,
@@ -376,7 +380,7 @@
 				CODE_SIGN_ENTITLEMENTS = Locus/Resources/Locus.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -387,7 +391,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/Vendor/idevice",
 				);
-				MARKETING_VERSION = 0.7.0;
+				MARKETING_VERSION = 0.8.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lidevice_ffi",
@@ -482,7 +486,7 @@
 				CODE_SIGN_ENTITLEMENTS = Locus/Resources/Locus.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -493,7 +497,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/Vendor/idevice",
 				);
-				MARKETING_VERSION = 0.7.0;
+				MARKETING_VERSION = 0.8.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-lidevice_ffi",

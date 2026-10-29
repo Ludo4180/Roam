@@ -12,6 +12,16 @@ enum TunnelConfig {
         return stored
     }
 
+    static var targetPort: UInt16 {
+        let value = UserDefaults.standard.integer(forKey: "roam.developerPort")
+        return (1...65535).contains(value) ? UInt16(value) : 49152
+    }
+
+    static func setTargetPort(_ value: String) {
+        guard let parsed = UInt16(value), parsed > 0 else { return }
+        UserDefaults.standard.set(Int(parsed), forKey: "roam.developerPort")
+    }
+
     static func setTargetIP(_ value: String) {
         UserDefaults.standard.set(value, forKey: defaultsKey)
     }

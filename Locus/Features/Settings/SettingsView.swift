@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var showImporter = false
     @State private var showPairOnDevice = false
     @State private var tunnelIP = TunnelConfig.targetIP
+    @State private var developerPort = String(TunnelConfig.targetPort)
     @State private var localDevVPNInstalled = LocalDevVPN.isInstalled
     @Environment(\.scenePhase) private var scenePhase
 
@@ -80,11 +81,19 @@ struct SettingsView: View {
                     Button("Save tunnel IP") {
                         TunnelConfig.setTargetIP(tunnelIP)
                     }
-                    Button("Test developer endpoint (TCP 49152)") {
+                    TextField("Developer port (default 49152)", text: $developerPort)
+                        .keyboardType(.numberPad)
+                    Button("Save developer port") {
+                        TunnelConfig.setTargetPort(developerPort)
+                    }
+                    Button("Test developer endpoint (TCP selected port)") {
                         TunnelConfig.setTargetIP(tunnelIP)
+                        TunnelConfig.setTargetPort(developerPort)
                         testDeveloperEndpoint()
                     }
                     LabeledContent("Endpoint diagnostic", value: probeResult)
+                    LabeledContent("Last engine stage", value: LocationEngine.lastStage)
+                    LabeledContent("Last engine failure", value: LocationEngine.lastFailure)
                         .font(.footnote)
                     Text("This checks TCP reachability only, not developer pairing or GPS simulation. Test once with cellular off, then again with cellular on.")
                         .font(.caption)
@@ -107,6 +116,17 @@ struct SettingsView: View {
                     Text("The VPN indicator only detects a local network interface; it does not prove the Apple developer tunnel is reachable. Start a new teleport on Wi-Fi first; movement may continue over mobile data.")
                 }
 
+                Section("CELLULAR RESEARCH — v0.8") {
+                    NavigationLink {
+                        CellularResearchView()
+                    } label: {
+                        Label("Wi-Fi / 5G tunnel diagnostics", systemImage: "network.badge.shield.half.filled")
+                    }
+                    Text("Read-only endpoint and paired-handshake tests. Does not modify GPS, pairing, or VPN settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("YOUR PRIVACY") {
                     Text("Fully on-device. Favorites and recents stay in UserDefaults. No analytics, no accounts, nothing uploaded.")
                         .font(.footnote)
@@ -127,6 +147,7 @@ struct SettingsView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
                         TunnelConfig.setTargetIP(tunnelIP)
+                        TunnelConfig.setTargetPort(developerPort)
                         dismiss()
                     }
                 }
@@ -163,7 +184,7 @@ struct SettingsView: View {
     private func testDeveloperEndpoint() {
         probeConnection?.cancel()
         probeResult = "Testing…"
-        guard let port = NWEndpoint.Port(rawValue: 49152) else {
+        guard let port = NWEndpoint.Port(rawValue: TunnelConfig.targetPort) else {
             probeResult = "Invalid port"
             return
         }

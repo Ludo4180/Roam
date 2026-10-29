@@ -56,7 +56,15 @@ enum LocationEngine {
     private static let locationSet: Int32 = 11
     private static let locationClear: Int32 = 12
 
+    // Diagnostic only: this reflects a retained handle, not proof of a live service.
     static var isSessionActive: Bool { locationSimulation != nil }
+    private(set) static var lastStage = "not started"
+    private(set) static var lastFailure = "none"
+    private static func fail(_ stage: String, _ code: Int32) -> Int32 {
+        lastStage = stage
+        lastFailure = "\(stage) (code \(code))"
+        return code
+    }
 
     static func set(latitude: Double, longitude: Double, pairingPath: String, deviceIP: String) -> Result<Void, LocationEngineError> {
         var result: Result<Void, LocationEngineError> = .failure(.locationSet)
@@ -96,29 +104,36 @@ enum LocationEngine {
     }
 
     private static func setLocked(latitude: Double, longitude: Double, pairingPath: String, deviceIP: String) -> Int32 {
+        lastStage = "reuse existing simulation"
         if let locationSimulation {
             if let err = location_simulation_set(locationSimulation, latitude, longitude) {
                 idevice_error_free(err)
-                cleanup()
+                // The existing handle may be invalid. Do not silently reconnect here:
+                // a failed replacement can terminate an otherwise persistent GPS override.
+                // User may explicitly Stop or restart the app to reset the handle.
+                return fail("existing session update", locationSet)
             } else {
+                lastStage = "existing session updated"
+                lastFailure = "none"
                 return ok
             }
         }
 
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = in_port_t(49152).bigEndian
+        address.sin_port = in_port_t(TunnelConfig.targetPort).bigEndian
         let inetResult = deviceIP.withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
-        guard inetResult == 1 else { return invalidIP }
+        guard inetResult == 1 else { return fail("invalid target IP", invalidIP) }
 
         var pairingHandle: OpaquePointer?
         if let pairingError = pairingPath.withCString({ rp_pairing_file_read($0, &pairingHandle) }) {
             idevice_error_free(pairingError)
-            return pairingRead
+            return fail("pairing file read", pairingRead)
         }
-        guard let pairingHandle else { return pairingRead }
+        guard let pairingHandle else { return fail("pairing file handle", pairingRead) }
         defer { rp_pairing_file_free(pairingHandle) }
 
+        lastStage = "opening RPPairing tunnel to \(deviceIP):\(TunnelConfig.targetPort)"
         let providerError = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 tunnel_create_rppairing(
@@ -136,19 +151,21 @@ enum LocationEngine {
         if let providerError {
             idevice_error_free(providerError)
             cleanup()
-            return tunnelCreate
+            return fail("tunnel_create_rppairing", tunnelCreate)
         }
 
+        lastStage = "RemoteXPC handshake"
         if let remoteServerError = remote_server_connect_rsd(adapter, handshake, &remoteServer) {
             idevice_error_free(remoteServerError)
             cleanup()
-            return remoteServerCode
+            return fail("remote_server_connect_rsd", remoteServerCode)
         }
 
+        lastStage = "opening location simulation"
         if let simError = location_simulation_new(remoteServer, &locationSimulation) {
             idevice_error_free(simError)
             cleanup()
-            return simulationCreate
+            return fail("location_simulation_new", simulationCreate)
         }
         // location_simulation_new consumes/owns remote server lifecycle alongside handle
         remoteServer = nil
@@ -156,8 +173,10 @@ enum LocationEngine {
         if let setError = location_simulation_set(locationSimulation, latitude, longitude) {
             idevice_error_free(setError)
             cleanup()
-            return locationSet
+            return fail("initial location_simulation_set", locationSet)
         }
+        lastStage = "location set succeeded"
+        lastFailure = "none"
         return ok
     }
 
