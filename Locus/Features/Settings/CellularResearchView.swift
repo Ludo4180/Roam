@@ -20,7 +20,9 @@ struct CellularResearchView: View {
         Form {
             Section("NETWORK SNAPSHOT") {
                 LabeledContent("System path", value: research.pathDescription)
-                LabeledContent("VPN indication", value: LocalDevVPN.isConnected ? "Interface detected" : "No matching interface")
+                LabeledContent("LocalDevVPN candidate", value: research.vpnInterfaceDescription)
+                LabeledContent("Network path interfaces", value: research.networkInterfacesDescription)
+                    .font(.caption)
                 Text(research.interfaceDescription)
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
@@ -52,6 +54,37 @@ struct CellularResearchView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("INTERFACE-BOUND TCP — NO GPS CHANGES") {
+                Text("Compare an ordinary TCP socket with one explicitly bound to a selected utun interface. Neither test authenticates to the developer service or changes GPS. Binding here does NOT change the interface used by Roam's idevice engine.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if research.utunInterfaces.isEmpty {
+                    Text("No utun interface is visible to this app. Connect the original LocalDevVPN, then refresh the snapshot.")
+                        .font(.footnote)
+                } else {
+                    Picker("Interface", selection: $research.selectedUtun) {
+                        ForEach(research.utunInterfaces, id: \.self) { name in
+                            Text(research.labelForUtun(name)).tag(name)
+                        }
+                    }
+                }
+                LabeledContent("Default TCP", value: research.unboundResult)
+                    .font(.footnote)
+                LabeledContent("Bound TCP", value: research.boundResult)
+                    .font(.footnote)
+                Button("Compare default vs interface-bound TCP") {
+                    if let port = UInt16(portText), port > 0 {
+                        research.runInterfaceBoundComparison(port: port)
+                    } else {
+                        research.generalNote = "Enter a TCP port from 1 to 65535."
+                    }
+                }
+                .disabled(research.utunInterfaces.isEmpty || research.interfaceTestRunning)
+                Text("If the bound socket connects over 5G but default TCP does not, that supports an interface-selection hypothesis. It does NOT prove the developer handshake can use that route. Interface binding can fail under iOS policy.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("PAIRED DEVELOPER HANDSHAKE — NO GPS CHANGES") {
                 Picker("Endpoint", selection: $handshakeHost) {
                     Text("VPN 10.7.0.1").tag("10.7.0.1")
@@ -77,7 +110,7 @@ struct CellularResearchView: View {
             }
 
             Section("COMPARISON") {
-                Text("1. With Wi-Fi ON and LocalDevVPN connected, run TCP tests.\n2. Turn Wi-Fi OFF in Settings, leave 4G/5G and LocalDevVPN ON, and run them again.\n3. Compare error messages and try the paired handshake only when not spoofing.")
+                Text("1. Connect ORIGINAL LocalDevVPN, turn Wi-Fi and mobile data OFF, refresh and compare normal/bound TCP.\n2. Leave Wi-Fi OFF and turn mobile data ON. Refresh and repeat the exact same tests without reconnecting VPN.\n3. Compare the bound-socket results and, only when not spoofing, try the paired handshake at 10.7.0.1.")
                     .font(.footnote)
                 if !research.generalNote.isEmpty {
                     Text(research.generalNote).font(.footnote)
@@ -106,7 +139,16 @@ private final class CellularResearchModel: ObservableObject {
     @Published var handshakeResult = "Not tested"
     @Published var handshakeRunning = false
     @Published var generalNote = ""
+    @Published var networkInterfacesDescription = "Checking…"
+    @Published var vpnInterfaceDescription = "Checking…"
+    @Published var utunInterfaces: [String] = []
+    @Published var selectedUtun = ""
+    @Published var unboundResult = "Not tested"
+    @Published var boundResult = "Not tested"
+    @Published var interfaceTestRunning = false
 
+    private var utunAddresses: [String: [String]] = [:]
+    private var lastInterfaceTestTime = "Not tested"
     private var monitor: NWPathMonitor?
     private let monitorQueue = DispatchQueue(label: "roam.research.path")
     private let tcpQueue = DispatchQueue(label: "roam.research.tcp")
@@ -130,6 +172,9 @@ private final class CellularResearchModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 self?.pathDescription = status
+                self?.networkInterfacesDescription = path.availableInterfaces.isEmpty
+                    ? "None exposed by system path"
+                    : path.availableInterfaces.map { "\($0.name) (\($0.type))" }.joined(separator: ", ")
                 self?.refreshInterfaces()
             }
         }
@@ -151,9 +196,14 @@ private final class CellularResearchModel: ObservableObject {
         }
         defer { freeifaddrs(start) }
         var items = Set<String>()
+        var vpnCandidates = [String: [String]]()
         var cursor: UnsafeMutablePointer<ifaddrs>? = first
         while let current = cursor {
             let item = current.pointee
+            let name = String(cString: item.ifa_name)
+            if name.hasPrefix("utun") && vpnCandidates[name] == nil {
+                vpnCandidates[name] = []
+            }
             if let addr = item.ifa_addr,
                addr.pointee.sa_family == UInt8(AF_INET) {
                 var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
@@ -161,15 +211,58 @@ private final class CellularResearchModel: ObservableObject {
                                socklen_t(MemoryLayout<sockaddr_in>.size),
                                &buffer, socklen_t(buffer.count),
                                nil, 0, NI_NUMERICHOST) == 0 {
-                    let name = String(cString: item.ifa_name)
-                    // Device IPs only: no GPS data, credentials, or certificates.
                     let ip = String(cString: buffer)
-                    items.insert("\(name): \(ip)")
+                    let index = name.withCString { if_nametoindex($0) }
+                    items.insert("\(name) [if#\(index)]: \(ip)")
+                    if name.hasPrefix("utun") {
+                        vpnCandidates[name, default: []].append(ip)
+                    }
                 }
             }
             cursor = item.ifa_next
         }
         interfaceDescription = items.sorted().joined(separator: "\n")
+        utunAddresses = vpnCandidates
+        utunInterfaces = vpnCandidates.keys.sorted()
+        // Prefer the observed LocalDevVPN tunnel address, 10.7.1.1, without
+        // assuming other utun interfaces are necessarily LocalDevVPN.
+        let candidate = utunInterfaces.first { vpnCandidates[$0]?.contains("10.7.1.1") == true }
+        if !utunInterfaces.contains(selectedUtun) {
+            selectedUtun = candidate ?? utunInterfaces.first ?? ""
+        }
+        if let candidate {
+            vpnInterfaceDescription = "10.7.1.1 on \(candidate) (not authenticated)"
+        } else {
+            vpnInterfaceDescription = "10.7.1.1 not seen (not proof VPN is off)"
+        }
+    }
+
+    func labelForUtun(_ name: String) -> String {
+        let addresses = utunAddresses[name] ?? []
+        return addresses.isEmpty ? name : "\(name) — \(addresses.joined(separator: ", "))"
+    }
+
+    func runInterfaceBoundComparison(port: UInt16) {
+        let interface = selectedUtun
+        guard !interface.isEmpty, utunInterfaces.contains(interface) else {
+            boundResult = "Select an available utun interface."
+            return
+        }
+        interfaceTestRunning = true
+        unboundResult = "Testing…"
+        boundResult = "Testing…"
+        lastInterfaceTestTime = ISO8601DateFormatter().string(from: Date())
+        // Both probes use the SAME BSD socket implementation to ensure the
+        // interface option is the only intentional difference between tests.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let normal = RoamBoundTCPProbe.check(host: "10.7.0.1", port: port, interface: nil)
+            DispatchQueue.main.async { self?.unboundResult = normal }
+            let bound = RoamBoundTCPProbe.check(host: "10.7.0.1", port: port, interface: interface)
+            DispatchQueue.main.async {
+                self?.boundResult = bound
+                self?.interfaceTestRunning = false
+            }
+        }
     }
 
     func runTCPTests(port: UInt16) {
@@ -232,14 +325,19 @@ private final class CellularResearchModel: ObservableObject {
 
     func report(port: String) -> String {
         var lines = [
-            "Roam v0.8 cellular research — \(ISO8601DateFormatter().string(from: Date()))",
+            "Roam v0.10 cellular research — \(ISO8601DateFormatter().string(from: Date()))",
             "Device network path: \(pathDescription)",
             "Interfaces:\n\(interfaceDescription)",
+            "Network path available interfaces: \(networkInterfacesDescription)",
+            "VPN candidate: \(vpnInterfaceDescription)",
             "TCP port: \(port); last tests: \(lastTCPTime)",
         ]
         for host in ["10.7.0.1", "127.0.0.1", "::1"] {
             lines.append("\(host): \(tcpResults[host] ?? "Not tested")")
         }
+        lines.append("Interface-bound test: \(lastInterfaceTestTime) / \(selectedUtun)")
+        lines.append("BSD default TCP: \(unboundResult)")
+        lines.append("BSD bound TCP: \(boundResult)")
         lines.append("Paired tunnel: \(handshakeResult)")
         return lines.joined(separator: "\n")
     }
@@ -297,5 +395,72 @@ private enum RoamPairingHandshakeProbe {
         let message = error.pointee.message.map { String(cString: $0) } ?? "Unspecified error"
         idevice_error_free(error)
         return "\(stage) failed [\(code)/\(sub)]: \(message)"
+    }
+}
+
+/// Compare BSD TCP connections with and without IP_BOUND_IF (Darwin socket
+/// option 25). This does NOT alter the idevice FFI connection or any VPN route.
+/// All operations are made on a background queue and time out after 5 seconds.
+private enum RoamBoundTCPProbe {
+    static func check(host: String, port: UInt16, interface: String?) -> String {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return "socket failed: \(explain(errno))" }
+        defer { _ = Darwin.close(fd) }
+
+        if let interface {
+            let index = interface.withCString { if_nametoindex($0) }
+            guard index != 0 else { return "Interface \(interface) not found" }
+            var boundIfIndex = Int32(index)
+            // Darwin's IP_BOUND_IF = 25. If iOS rejects the binding, preserve
+            // and report its exact errno rather than retrying on cellular.
+            let result = withUnsafePointer(to: &boundIfIndex) { pointer in
+                setsockopt(fd, IPPROTO_IP, 25, pointer,
+                           socklen_t(MemoryLayout<Int32>.size))
+            }
+            guard result == 0 else {
+                return "IP_BOUND_IF \(interface) failed: \(explain(errno))"
+            }
+        }
+
+        let oldFlags = fcntl(fd, F_GETFL, 0)
+        guard oldFlags >= 0 && fcntl(fd, F_SETFL, oldFlags | O_NONBLOCK) == 0 else {
+            return "Nonblocking setup failed: \(explain(errno))"
+        }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(port).bigEndian
+        guard host.withCString({ inet_pton(AF_INET, $0, &address.sin_addr) }) == 1 else {
+            return "Invalid IPv4 endpoint"
+        }
+
+        let connectResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if connectResult == 0 { return "TCP connected" }
+        let connectError = errno
+        guard connectError == EINPROGRESS else {
+            return "connect failed: \(explain(connectError))"
+        }
+
+        var event = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        let waitResult = Darwin.poll(&event, 1, 5_000)
+        if waitResult == 0 { return "Timed out after 5 seconds" }
+        if waitResult < 0 { return "poll failed: \(explain(errno))" }
+
+        var socketError: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        let optionResult = withUnsafeMutablePointer(to: &socketError) { pointer in
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, pointer, &length)
+        }
+        guard optionResult == 0 else { return "SO_ERROR failed: \(explain(errno))" }
+        return socketError == 0 ? "TCP connected" : "connect failed: \(explain(socketError))"
+    }
+
+    private static func explain(_ code: Int32) -> String {
+        "\(String(cString: strerror(code))) (errno \(code))"
     }
 }

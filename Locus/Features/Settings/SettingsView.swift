@@ -116,7 +116,7 @@ struct SettingsView: View {
                     Text("The VPN indicator only detects a local network interface; it does not prove the Apple developer tunnel is reachable. Start a new teleport on Wi-Fi first; movement may continue over mobile data.")
                 }
 
-                Section("CELLULAR RESEARCH — v0.8") {
+                Section("CELLULAR RESEARCH — v0.10") {
                     NavigationLink {
                         CellularResearchView()
                     } label: {

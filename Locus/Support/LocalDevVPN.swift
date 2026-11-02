@@ -6,8 +6,8 @@ enum LocalDevVPN {
     static let appStoreURL = URL(string: "https://apps.apple.com/us/app/localdevvpn/id6755608044")!
     static let detectURL = URL(string: "localdevvpn://")!
 
-    /// Starts the tunnel, then returns to Roam via the registered `roam://` callback.
-    static let enableURL = URL(string: "localdevvpn://enable?scheme=roam")!
+    /// Starts the tunnel, then returns to Roam via the registered `roamdiagnostics://` callback.
+    static let enableURL = URL(string: "localdevvpn://enable?scheme=roamdiagnostics")!
 
     static var isInstalled: Bool {
         UIApplication.shared.canOpenURL(detectURL)

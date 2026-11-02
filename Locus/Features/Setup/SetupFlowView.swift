@@ -12,6 +12,7 @@ struct SetupFlowView: View {
     @State private var step: Step
     @State private var appear = false
     @State private var showImporter = false
+    @State private var showCellularResearch = false
     @State private var localDevVPNInstalled = LocalDevVPN.isInstalled
     @Environment(\.scenePhase) private var scenePhase
 
@@ -80,6 +81,20 @@ struct SetupFlowView: View {
                 SetupGate.markInProgress()
                 withAnimation { step = .vpn }
             }
+        }
+        // A separate experimental app ID has an empty sandbox on first launch.
+        // Allow read-only TCP routing diagnostics without demanding a pairing file.
+        .sheet(isPresented: $showCellularResearch) {
+            NavigationStack {
+                CellularResearchView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { showCellularResearch = false }
+                        }
+                    }
+            }
+            .environmentObject(pairing)
+            .environmentObject(session)
         }
         .sheet(isPresented: $showImporter) {
             PairingDocumentPicker(
@@ -208,6 +223,11 @@ struct SetupFlowView: View {
                     SetupGate.markInProgress()
                     withAnimation { step = .pairing }
                 }
+                Button("Open cellular diagnostics (no pairing needed)") {
+                    showCellularResearch = true
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 28)
