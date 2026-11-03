@@ -78,6 +78,8 @@ final class SpoofSession: ObservableObject {
     @Published var lastError: String?
     @Published var isBusy = false
     @Published var joystickActive = false
+    // Reports the local API result; Apple Maps is the external verification.
+    @Published private(set) var lastTeleportResult = "No teleport attempted in this session"
 
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
@@ -102,24 +104,48 @@ final class SpoofSession: ObservableObject {
     }
 
     var isSpoofing: Bool {
+        // Even after a failed location update, a retained developer handle is
+        // valuable: show Teleport and End Session instead of treating it as gone.
+        if LocationEngine.isSessionActive { return true }
         if case .active = status { return true }
         if case .reconnecting = status { return true }
         return false
     }
 
+    /// A new destination is an UPDATE to the retained simulation when one exists.
+    /// Never call clear()/stop() as a prerequisite to teleportation.
     func teleport(to coordinate: CLLocationCoordinate2D, pairing: PairingStore) {
         guard pairing.hasPairingFile else {
             lastError = "Import an RPPairing file in Settings first."
             return
         }
+        guard !isBusy else { return }
+        pauseMovement() // prevent a route/joystick tick from overwriting the teleport
+        let usedRetainedSession = LocationEngine.isSessionActive
         pin = coordinate
-        apply(coordinate, pairing: pairing, markRecent: true)
+        let succeeded = apply(coordinate, pairing: pairing, markRecent: true)
+        if succeeded {
+            lastTeleportResult = usedRetainedSession
+                ? "Persistent teleport sent through the retained session — verify in Apple Maps"
+                : "Initial teleport sent through a new session — verify in Apple Maps"
+        } else {
+            lastTeleportResult = usedRetainedSession
+                ? "Persistent teleport failed; session handle kept for another attempt"
+                : "Initial teleport failed; no location session established"
+        }
     }
 
-    func stop(pairing: PairingStore) {
+    /// Stops the joystick or route without clearing Apple's simulated location.
+    /// This is safe to use before switching to a new teleport target.
+    func pauseMovement() {
         routeTask?.cancel()
         routeTask = nil
         stopJoystick()
+    }
+
+    /// Explicit END SIMULATION only; should never be used for pause or teleport.
+    func stop(pairing: PairingStore) {
+        pauseMovement()
         stopResend()
         stopHealth()
         isBusy = true
@@ -128,6 +154,7 @@ final class SpoofSession: ObservableObject {
         switch result {
         case .success:
             simulated = nil
+            lastTeleportResult = "Simulation ended; real GPS should resume"
             status = .idle
             endBackground()
             // Keep location updates running so the map puck / locate button
@@ -290,7 +317,8 @@ final class SpoofSession: ObservableObject {
         return false
     }
 
-    private func apply(_ coordinate: CLLocationCoordinate2D, pairing: PairingStore, markRecent: Bool) {
+    @discardableResult
+    private func apply(_ coordinate: CLLocationCoordinate2D, pairing: PairingStore, markRecent: Bool) -> Bool {
         if status == .idle || status.isDropped {
             status = .connecting
         }
@@ -317,6 +345,7 @@ final class SpoofSession: ObservableObject {
             if markRecent {
                 pushRecent(coordinate)
             }
+            return true
         case .failure(let error):
             lastError = error.localizedDescription
             if simulated != nil {
@@ -329,6 +358,7 @@ final class SpoofSession: ObservableObject {
             } else {
                 status = .idle
             }
+            return false
         }
     }
 

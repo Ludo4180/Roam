@@ -60,10 +60,29 @@ enum LocationEngine {
     static var isSessionActive: Bool { locationSimulation != nil }
     private(set) static var lastStage = "not started"
     private(set) static var lastFailure = "none"
-    private static func fail(_ stage: String, _ code: Int32) -> Int32 {
+    private static func fail(_ stage: String, _ code: Int32, detail: String? = nil) -> Int32 {
         lastStage = stage
-        lastFailure = "\(stage) (code \(code))"
+        if let detail {
+            lastFailure = "\(stage) [\(code)]: \(detail)"
+        } else {
+            lastFailure = "\(stage) (code \(code))"
+        }
         return code
+    }
+
+    /// Capture the underlying idevice FFI error before releasing it. In v0.11
+    /// only the generic stage was exposed, obscuring whether transport,
+    /// pairing, or RSD was responsible for a failure.
+    private static func failFFI(_ error: UnsafeMutablePointer<IdeviceFfiError>,
+                                stage: String, code: Int32, pairingPath: String = "") -> Int32 {
+        let ffiCode = error.pointee.code
+        let subCode = error.pointee.sub_code
+        var message = error.pointee.message.map { String(cString: $0) } ?? "No detail"
+        if !pairingPath.isEmpty {
+            message = message.replacingOccurrences(of: pairingPath, with: "[pairing file]")
+        }
+        idevice_error_free(error)
+        return fail(stage, code, detail: "idevice [\(ffiCode)/\(subCode)] \(message)")
     }
 
     static func set(latitude: Double, longitude: Double, pairingPath: String, deviceIP: String) -> Result<Void, LocationEngineError> {
@@ -107,11 +126,10 @@ enum LocationEngine {
         lastStage = "reuse existing simulation"
         if let locationSimulation {
             if let err = location_simulation_set(locationSimulation, latitude, longitude) {
-                idevice_error_free(err)
                 // The existing handle may be invalid. Do not silently reconnect here:
                 // a failed replacement can terminate an otherwise persistent GPS override.
                 // User may explicitly Stop or restart the app to reset the handle.
-                return fail("existing session update", locationSet)
+                return failFFI(err, stage: "existing session update", code: locationSet)
             } else {
                 lastStage = "existing session updated"
                 lastFailure = "none"
@@ -127,8 +145,8 @@ enum LocationEngine {
 
         var pairingHandle: OpaquePointer?
         if let pairingError = pairingPath.withCString({ rp_pairing_file_read($0, &pairingHandle) }) {
-            idevice_error_free(pairingError)
-            return fail("pairing file read", pairingRead)
+            return failFFI(pairingError, stage: "pairing file read", code: pairingRead,
+                           pairingPath: pairingPath)
         }
         guard let pairingHandle else { return fail("pairing file handle", pairingRead) }
         defer { rp_pairing_file_free(pairingHandle) }
@@ -149,31 +167,31 @@ enum LocationEngine {
             }
         }
         if let providerError {
-            idevice_error_free(providerError)
+            let code = failFFI(providerError, stage: "tunnel_create_rppairing", code: tunnelCreate)
             cleanup()
-            return fail("tunnel_create_rppairing", tunnelCreate)
+            return code
         }
 
         lastStage = "RemoteXPC handshake"
         if let remoteServerError = remote_server_connect_rsd(adapter, handshake, &remoteServer) {
-            idevice_error_free(remoteServerError)
+            let code = failFFI(remoteServerError, stage: "remote_server_connect_rsd", code: remoteServerCode)
             cleanup()
-            return fail("remote_server_connect_rsd", remoteServerCode)
+            return code
         }
 
         lastStage = "opening location simulation"
         if let simError = location_simulation_new(remoteServer, &locationSimulation) {
-            idevice_error_free(simError)
+            let code = failFFI(simError, stage: "location_simulation_new", code: simulationCreate)
             cleanup()
-            return fail("location_simulation_new", simulationCreate)
+            return code
         }
         // location_simulation_new consumes/owns remote server lifecycle alongside handle
         remoteServer = nil
 
         if let setError = location_simulation_set(locationSimulation, latitude, longitude) {
-            idevice_error_free(setError)
+            let code = failFFI(setError, stage: "initial location_simulation_set", code: locationSet)
             cleanup()
-            return fail("initial location_simulation_set", locationSet)
+            return code
         }
         lastStage = "location set succeeded"
         lastFailure = "none"
@@ -181,13 +199,17 @@ enum LocationEngine {
     }
 
     private static func clearLocked() -> Int32 {
-        guard let locationSimulation else { return locationClear }
-        let err = location_simulation_clear(locationSimulation)
-        cleanup()
-        if let err {
-            idevice_error_free(err)
-            return locationClear
+        guard let locationSimulation else { return fail("clear without retained session", locationClear) }
+        // v0.11: A failed clear must NOT discard our only usable RSD handle.
+        // Under cellular, reopening a new developer connection can fail, while
+        // the already-established session may still accept location updates.
+        if let err = location_simulation_clear(locationSimulation) {
+            return failFFI(err, stage: "location_simulation_clear failed (session handle retained)",
+                           code: locationClear)
         }
+        cleanup()
+        lastStage = "location simulation cleared"
+        lastFailure = "none"
         return ok
     }
 }

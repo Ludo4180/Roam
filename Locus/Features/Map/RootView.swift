@@ -91,9 +91,9 @@ struct StatusBarView: View {
     }
 
     private var detailText: String {
-        if !tunnelConnected { return "LocalDevVPN not detected — tap to open" }
+        if !tunnelConnected { return "VPN interface not observed — tap to check LocalDevVPN" }
         if isActive { return "Virtual movement enabled while the session remains active" }
-        return "VPN detected • developer tunnel not verified"
+        return "VPN-like interface seen • developer tunnel NOT verified"
     }
 
     var body: some View {
@@ -158,6 +158,7 @@ struct BottomControlsView: View {
     @EnvironmentObject private var pairing: PairingStore
     @Binding var showSettings: Bool
     @Binding var showPlaces: Bool
+    @State private var confirmEndSimulation = false
 
     private var speedCaption: String {
         String(format: "%.0f km/h preset", session.travelMode.baseSpeed * 3.6)
@@ -246,44 +247,77 @@ struct BottomControlsView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel(session.joystickActive ? "Close joystick" : "Open joystick")
 
-                    if session.isSpoofing {
+                    // v0.11: Teleport stays visible even with an active simulation.
+                    // This calls location_simulation_set on the RETAINED handle.
+                    Button {
+                        guard let pin = session.pin else {
+                            session.lastError = "Choose a destination on the map first."
+                            return
+                        }
+                        session.teleport(to: pin, pairing: pairing)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "location.north.fill")
+                                .font(.system(size: 12))
+                            Text(session.isSpoofing ? "Re-teleport" : "Teleport")
+                        }
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(RoamPalette.background)
+                        .frame(minWidth: 106, minHeight: 46)
+                        .background(RoamPalette.primaryGradient, in: Capsule())
+                        .shadow(color: RoamPalette.electricBlue.opacity(0.26), radius: 8, y: 4)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(session.isBusy)
+                    .opacity(session.isBusy ? 0.65 : 1)
+                }
+
+                if session.isSpoofing {
+                    HStack(spacing: 10) {
                         Button {
-                            session.stop(pairing: pairing)
+                            session.pauseMovement()
                         } label: {
-                            Label("Stop", systemImage: "stop.fill")
-                                .font(.system(size: 14, weight: .bold))
+                            Label("Pause movement", systemImage: "pause.fill")
+                                .font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(.white)
-                                .frame(minWidth: 98, minHeight: 46)
-                                .background(Capsule().fill(LocusTheme.danger))
+                                .frame(maxWidth: .infinity, minHeight: 38)
+                                .background(RoamPalette.electricBlue.opacity(0.17), in: Capsule())
                         }
                         .buttonStyle(.plain)
-                    } else {
+
                         Button {
-                            guard let pin = session.pin else {
-                                session.lastError = "Choose a destination on the map first."
-                                return
-                            }
-                            session.teleport(to: pin, pairing: pairing)
+                            confirmEndSimulation = true
                         } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "location.north.fill")
-                                    .font(.system(size: 12))
-                                Text("Teleport")
-                            }
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(RoamPalette.background)
-                            .frame(minWidth: 106, minHeight: 46)
-                            .background(RoamPalette.primaryGradient, in: Capsule())
-                            .shadow(color: RoamPalette.electricBlue.opacity(0.26), radius: 8, y: 4)
+                            Label("End simulation", systemImage: "stop.fill")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity, minHeight: 38)
+                                .background(LocusTheme.danger.opacity(0.92), in: Capsule())
                         }
                         .buttonStyle(.plain)
                         .disabled(session.isBusy)
-                        .opacity(session.isBusy ? 0.65 : 1)
                     }
                 }
+                Text(session.lastTeleportResult)
+                    .font(.system(size: 10))
+                    .foregroundStyle(RoamPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(session.lastTeleportResult)
             }
             .padding(15)
             .roamSurface(cornerRadius: 25)
+        }
+        .confirmationDialog(
+            "End GPS simulation?",
+            isPresented: $confirmEndSimulation,
+            titleVisibility: .visible
+        ) {
+            Button("End Simulation", role: .destructive) {
+                session.stop(pairing: pairing)
+            }
+            Button("Keep Simulation", role: .cancel) { }
+        } message: {
+            Text("This clears the simulated GPS position. On cellular, you may need Wi-Fi again to start a new session.")
         }
     }
 

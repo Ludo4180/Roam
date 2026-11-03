@@ -74,10 +74,13 @@ struct SettingsView: View {
                         .onSubmit {
                             TunnelConfig.setTargetIP(tunnelIP)
                         }
-                    LabeledContent("VPN interface") {
-                        Text(LocalDevVPN.isConnected ? "Detected" : "Not detected")
+                    LabeledContent("VPN-like interface") {
+                        Text(LocalDevVPN.isConnected ? "Candidate seen (unverified)" : "No candidate seen")
                             .foregroundStyle(LocalDevVPN.isConnected ? LocusTheme.statusGood : LocusTheme.statusWarn)
                     }
+                    Text(LocalDevVPN.candidateDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Button("Save tunnel IP") {
                         TunnelConfig.setTargetIP(tunnelIP)
                     }
@@ -113,10 +116,10 @@ struct SettingsView: View {
                 } header: {
                     Text("Tunnel")
                 } footer: {
-                    Text("The VPN indicator only detects a local network interface; it does not prove the Apple developer tunnel is reachable. Start a new teleport on Wi-Fi first; movement may continue over mobile data.")
+                    Text("A VPN interface candidate is not proof that LocalDevVPN is running or that the Apple developer tunnel is reachable. Start a new teleport on Wi-Fi first; movement may continue over mobile data.")
                 }
 
-                Section("CELLULAR RESEARCH — v0.10") {
+                Section("CELLULAR RESEARCH — v0.12") {
                     NavigationLink {
                         CellularResearchView()
                     } label: {

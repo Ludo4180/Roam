@@ -1,3 +1,5 @@
+> **Roam v0.12 experimental source (2026-11-03):** For the actual Roam build changes, Codemagic steps and controlled cellular tests, start with **[ROAM_V0.12_BUILD_AND_TEST.md](ROAM_V0.12_BUILD_AND_TEST.md)**. The document below is the retained upstream Locus project README; its install/release links and bundle ID do **not** describe the experimental Roam v0.12 package.
+
 # Locus
 
 Free and open-source iPhone location teleport. Tap the map, search a place, or drive a route — Locus injects coordinates through Apple’s **developer location service** into `locationd`, so Maps and other apps see the spoofed GPS (not just a Wi‑Fi lookup that outdoor GPS will overwrite).
