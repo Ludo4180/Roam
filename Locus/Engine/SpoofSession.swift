@@ -101,6 +101,14 @@ final class SpoofSession: ObservableObject {
     @Published private(set) var movementFailed = 0
     @Published private(set) var lastMovementResult = "No movement commands attempted"
     @Published private(set) var movementEvents: [MovementDiagnosticEvent] = []
+    // v0.14: foreground continuous movement, including a fixed-length hands-free
+    // trial so Apple Maps can be inspected AFTER the movement has finished.
+    @Published private(set) var cruiseActive = false
+    @Published private(set) var cruiseSecondsRemaining = 0
+    @Published private(set) var continuousAcceptedMeters = 0.0
+    @Published private(set) var continuousAcceptedTicks = 0
+    @Published private(set) var continuousFailedTicks = 0
+    @Published private(set) var lastContinuousStatus = "No continuous movement attempted"
 
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
@@ -111,6 +119,10 @@ final class SpoofSession: ObservableObject {
     private var resendTimer: Timer?
     private var healthTimer: Timer?
     private var joystickTimer: Timer?
+    private var cruiseTimer: Timer?
+    private var cruiseDeadlineUptime: TimeInterval?
+    private var lastMovementTickUptime: TimeInterval?
+    private let movementTickInterval: TimeInterval = 0.8
     private var routeTask: Task<Void, Never>?
     private var backgroundTask = UIBackgroundTaskIdentifier.invalid
     private var joystickVector: CGVector = .zero
@@ -170,6 +182,15 @@ final class SpoofSession: ObservableObject {
         routeTask?.cancel()
         routeTask = nil
         stopJoystick()
+        stopCruise(reason: "Movement paused; last accepted GPS coordinate retained")
+    }
+
+    /// Foreground-only: if the user switches to Apple Maps mid-movement,
+    /// stop sending updates without clearing the established developer handle.
+    func applicationEnteredBackground() {
+        guard joystickActive || cruiseActive else { return }
+        pauseMovement()
+        lastContinuousStatus = "App backgrounded: movement paused; GPS session not cleared"
     }
 
     /// Explicit END SIMULATION only; should never be used for pause or teleport.
@@ -219,35 +240,83 @@ final class SpoofSession: ObservableObject {
         if simulated == nil {
             let opened = apply(start, pairing: pairing, markRecent: false)
             recordMovement(action: "Joystick initial location", coordinate: start, succeeded: opened)
-            // If the developer service was unreachable, do not make the
-            // joystick appear active when there is no simulation to move.
             guard opened else { return }
         }
+        stopCruise(reason: "Switched to joystick")
+        stopJoystick()
+        resetContinuousCounters()
         joystickActive = true
-        lastMovementResult = "Joystick ready; drag to send movements"
-        joystickTimer?.invalidate()
-        joystickTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.tickJoystick(pairing: pairing)
-            }
+        lastMovementResult = "Joystick ready — press and drag to move"
+        lastContinuousStatus = "Joystick ready (foreground only)"
+        joystickTimer = Timer.scheduledTimer(withTimeInterval: movementTickInterval, repeats: true) { [weak self] _ in
+            // The synchronous API call runs on the main actor; its timer will
+            // not trigger concurrently with an in-flight location update.
+            Task { @MainActor [weak self] in self?.tickJoystick(pairing: pairing) }
         }
     }
 
     func updateJoystick(vector: CGVector) {
         joystickVector = vector
+        if hypot(vector.dx, vector.dy) <= 0.08 {
+            // Reset elapsed-time calculation when released, so the first
+            // movement after a pause doesn't leap forward.
+            lastMovementTickUptime = nil
+            if joystickActive { lastContinuousStatus = "Joystick released — holding last accepted coordinate" }
+        }
     }
 
     func stopJoystick() {
         joystickActive = false
         joystickVector = .zero
+        lastMovementTickUptime = nil
         joystickTimer?.invalidate()
         joystickTimer = nil
+    }
+
+    /// A reproducible 20-second North movement, using the identical
+    /// LocationEngine.set/apply path as the successful 200m GPS step.
+    /// Only an ALREADY retained developer session may be used.
+    func startNorthCruise20(pairing: PairingStore) {
+        guard !isBusy, pairing.hasPairingFile,
+              LocationEngine.isSessionActive, simulated != nil else {
+            lastMovementResult = "Cruise blocked: establish an initial Wi-Fi teleport first"
+            lastError = "A retained simulation is required. Start a successful teleport on Wi-Fi before the 4G movement trial."
+            return
+        }
+        pauseMovement()
+        resetContinuousCounters()
+        cruiseActive = true
+        cruiseSecondsRemaining = 20
+        lastContinuousStatus = "Moving north for 20 seconds at \(travelMode.title) preset"
+        cruiseDeadlineUptime = ProcessInfo.processInfo.systemUptime + 20
+        cruiseTimer = Timer.scheduledTimer(withTimeInterval: movementTickInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.tickCruise(pairing: pairing) }
+        }
+    }
+
+    func stopCruise(reason: String = "Cruise stopped — last accepted position held") {
+        guard cruiseActive || cruiseTimer != nil else { return }
+        cruiseActive = false
+        cruiseTimer?.invalidate()
+        cruiseTimer = nil
+        cruiseDeadlineUptime = nil
+        lastMovementTickUptime = nil
+        cruiseSecondsRemaining = 0
+        lastContinuousStatus = reason
+    }
+
+    private func resetContinuousCounters() {
+        continuousAcceptedMeters = 0
+        continuousAcceptedTicks = 0
+        continuousFailedTicks = 0
+        lastMovementTickUptime = nil
     }
 
     /// Keep the last successfully sent position; do NOT clear GPS or reconnect.
     func holdPosition() {
         pauseMovement()
         lastMovementResult = "Hold: movement stopped; the last accepted location was not cleared"
+        lastContinuousStatus = "Hold position selected; developer session not cleared"
     }
 
     /// Single deterministic movement, so Apple Maps can be checked after
@@ -269,7 +338,9 @@ final class SpoofSession: ObservableObject {
         movementAccepted = 0
         movementFailed = 0
         movementEvents.removeAll()
+        resetContinuousCounters()
         lastMovementResult = "Diagnostics reset; simulation unchanged"
+        lastContinuousStatus = "Continuous counters reset; simulation unchanged"
     }
 
     /// For copying into troubleshooting notes; coordinates are included only
@@ -285,10 +356,15 @@ final class SpoofSession: ObservableObject {
             "\(fmt.string(from: $0.timestamp)) | \($0.action) | \($0.succeeded ? "API accepted" : "API failed") | \($0.detail)"
         }.joined(separator: "\n")
         return """
-        Roam v0.13 movement diagnostics
+        Roam v0.14 movement diagnostics
         Status: \(status.label)
         Retained location handle: \(LocationEngine.isSessionActive ? "present (not independently validated)" : "absent")
         Attempts: \(movementAttempts), accepted: \(movementAccepted), failed: \(movementFailed)
+        Continuous trial: \(lastContinuousStatus)
+        Continuous API-accepted distance: \(String(format: "%.1f", continuousAcceptedMeters)) m
+        Continuous ticks: \(continuousAcceptedTicks) accepted, \(continuousFailedTicks) failed
+        Cruise active: \(cruiseActive), remaining seconds: \(cruiseSecondsRemaining)
+        Update interval target: \(movementTickInterval) s (actual elapsed time measured and capped)
         Last requested: \(coordinate(lastRequestedCoordinate))
         Last API-accepted: \(coordinate(lastAcceptedCoordinate))
         Latest Roam CoreLocation callback: \(coordinate(lastObservedCoordinate)) at \(observedTime)
@@ -300,7 +376,7 @@ final class SpoofSession: ObservableObject {
         """
     }
 
-    private func recordMovement(action: String, coordinate: CLLocationCoordinate2D, succeeded: Bool) {
+    private func recordMovement(action: String, coordinate: CLLocationCoordinate2D, succeeded: Bool, extra: String = "") {
         movementAttempts += 1
         lastRequestedCoordinate = coordinate
         if succeeded {
@@ -309,9 +385,10 @@ final class SpoofSession: ObservableObject {
         } else {
             movementFailed += 1
         }
-        let detail = succeeded
+        let baseDetail = succeeded
             ? "location_simulation_set returned success (not independently verified)"
             : "\(LocationEngine.lastStage): \(LocationEngine.lastFailure)"
+        let detail = extra.isEmpty ? baseDetail : "\(baseDetail); \(extra)"
         lastMovementResult = "\(action): \(succeeded ? "API accepted" : "API failed")"
         movementEvents.insert(MovementDiagnosticEvent(
             timestamp: Date(), action: action, succeeded: succeeded, detail: detail
@@ -323,6 +400,7 @@ final class SpoofSession: ObservableObject {
         guard pairing.hasPairingFile, coordinates.count >= 2 else { return }
         routeTask?.cancel()
         stopJoystick()
+        stopCruise(reason: "Switched to route playback")
         let mode = travelMode
         routeTask = Task { [weak self] in
             guard let self else { return }
@@ -459,6 +537,7 @@ final class SpoofSession: ObservableObject {
             lastError = error.localizedDescription
             if simulated != nil {
                 stopJoystick()
+                stopCruise(reason: "Movement stopped after location API failure")
                 routeTask?.cancel()
                 stopResend()
                 stopHealth()
@@ -472,17 +551,70 @@ final class SpoofSession: ObservableObject {
     }
 
     private func tickJoystick(pairing: PairingStore) {
-        guard joystickActive, let current = simulated else { return }
-        let magnitude = hypot(joystickVector.dx, joystickVector.dy)
+        guard joystickActive else { return }
+        let vector = joystickVector
+        guard hypot(vector.dx, vector.dy) > 0.08 else {
+            lastMovementTickUptime = nil
+            return
+        }
+        sendContinuousMovement(vector: vector, label: "Joystick \(travelMode.title)", pairing: pairing)
+    }
+
+    private func tickCruise(pairing: PairingStore) {
+        guard cruiseActive, let deadline = cruiseDeadlineUptime else { return }
+        let remaining = deadline - ProcessInfo.processInfo.systemUptime
+        if remaining <= 0 {
+            stopCruise(reason: "20-second trial completed; last API-accepted coordinate held")
+            return
+        }
+        cruiseSecondsRemaining = Int(ceil(remaining))
+        sendContinuousMovement(vector: CGVector(dx: 0, dy: -1),
+                               label: "Cruise north \(travelMode.title)", pairing: pairing)
+        if cruiseActive && ProcessInfo.processInfo.systemUptime >= deadline {
+            stopCruise(reason: "20-second trial completed; last API-accepted coordinate held")
+        }
+    }
+
+    /// Both joystick and timed trial use this same location-simulation API.
+    /// Monotonic elapsed time prevents an 0.8-second tick from accidentally
+    /// implying the same distance after a stalled network call. We cap long
+    /// scheduling gaps so foreground suspension doesn't cause a location jump.
+    private func sendContinuousMovement(vector: CGVector, label: String, pairing: PairingStore) {
+        guard let current = simulated, LocationEngine.isSessionActive, !isBusy else {
+            lastContinuousStatus = "No valid retained session for movement"
+            stopContinuousMovementAfterFailure()
+            return
+        }
+        let magnitude = hypot(vector.dx, vector.dy)
         guard magnitude > 0.08 else { return }
-        let nx = joystickVector.dx / magnitude
-        let ny = -joystickVector.dy / magnitude
-        let speed = travelMode.baseSpeed * min(1.0, magnitude) * Double.random(in: 0.9...1.1)
-        let dt = 0.25
+        let now = ProcessInfo.processInfo.systemUptime
+        let elapsed = lastMovementTickUptime.map { now - $0 } ?? movementTickInterval
+        lastMovementTickUptime = now
+        let dt = max(0.1, min(elapsed, 1.2))
+        let speed = travelMode.baseSpeed * min(1.0, magnitude)
         let meters = speed * dt
-        let next = offset(coordinate: current, eastMeters: nx * meters, northMeters: ny * meters)
+        let next = offset(coordinate: current,
+                          eastMeters: vector.dx / magnitude * meters,
+                          northMeters: -vector.dy / magnitude * meters)
         let succeeded = apply(next, pairing: pairing, markRecent: false)
-        recordMovement(action: "Joystick \(travelMode.title)", coordinate: next, succeeded: succeeded)
+        recordMovement(action: label, coordinate: next, succeeded: succeeded,
+                       extra: String(format: "dt %.2f s, requested %.2f m", dt, meters))
+        if succeeded {
+            continuousAcceptedTicks += 1
+            continuousAcceptedMeters += meters
+            lastContinuousStatus = String(format: "%@: accepted %d updates, %.1f m requested/accepted by API", label, continuousAcceptedTicks, continuousAcceptedMeters)
+        } else {
+            continuousFailedTicks += 1
+            lastContinuousStatus = "\(label): API failed — movement stopped; session handle not cleared"
+            stopContinuousMovementAfterFailure()
+        }
+    }
+
+    private func stopContinuousMovementAfterFailure() {
+        // Do not call LocationEngine.clear, and do not retry opening a tunnel
+        // over 4G. Keep the existing handle for diagnostics and a manual step.
+        stopJoystick()
+        if cruiseActive { stopCruise(reason: "Movement halted after API failure; session handle retained") }
     }
 
     private func startResend(pairing: PairingStore) {

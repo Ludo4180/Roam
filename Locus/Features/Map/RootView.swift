@@ -1,10 +1,10 @@
 import SwiftUI
-import CoreLocation
 import NetworkExtension
 
 // Roam v0.5: a branded interface over the original, unchanged GPS engine.
 struct RootView: View {
     @EnvironmentObject private var session: SpoofSession
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showSettings = false
     @State private var showPlaces = false
 
@@ -23,6 +23,9 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPlaces) { PlacesView() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { session.applicationEnteredBackground() }
+        }
         .alert("Roam", isPresented: Binding(
             get: { session.lastError != nil },
             set: { if !$0 { session.lastError = nil } }
@@ -194,10 +197,10 @@ struct BottomControlsView: View {
                                     .font(.system(size: 11, weight: .semibold))
                             }
                             .buttonStyle(.bordered)
-                            Text(session.lastMovementResult)
+                            Text(session.lastContinuousStatus)
                                 .font(.system(size: 10))
                                 .foregroundStyle(RoamPalette.muted)
-                                .lineLimit(3)
+                                .lineLimit(4)
                         }
                         if !joystickOnRight { Spacer(minLength: 4) }
                     }
@@ -315,6 +318,37 @@ struct BottomControlsView: View {
                         .buttonStyle(.bordered)
                         .disabled(session.isBusy)
                     }
+                    // v0.14: a measurable continuous movement trial which ends
+                    // on its own before inspecting Apple Maps. Never clears GPS.
+                    HStack(spacing: 8) {
+                        if session.cruiseActive {
+                            Button {
+                                session.stopCruise()
+                            } label: {
+                                Label("Stop moving (\(session.cruiseSecondsRemaining)s)", systemImage: "stop.circle")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .frame(maxWidth: .infinity, minHeight: 38)
+                            }
+                            .buttonStyle(.bordered)
+                        } else {
+                            Button {
+                                session.startNorthCruise20(pairing: pairing)
+                            } label: {
+                                Label("Move north for 20s", systemImage: "arrow.up.forward")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .frame(maxWidth: .infinity, minHeight: 38)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(session.isBusy)
+                        }
+                        Text(String(format: "%.1f m API accepted", session.continuousAcceptedMeters))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(RoamPalette.turquoise)
+                            .frame(maxWidth: .infinity)
+                    }
+                    Text("Continuous movement is tested in the foreground. Switch to Apple Maps after the 20-second trial ends; compare the blue dot independently.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(RoamPalette.muted)
                 }
 
                 Button {
@@ -466,6 +500,16 @@ private struct MovementDiagnosticsView: View {
                     LabeledContent("API failed", value: String(session.movementFailed))
                     Text(session.lastMovementResult)
                         .font(.footnote)
+                }
+                Section("Continuous movement (v0.14)") {
+                    LabeledContent("Accepted movement updates", value: String(session.continuousAcceptedTicks))
+                    LabeledContent("Failed movement updates", value: String(session.continuousFailedTicks))
+                    LabeledContent("Distance accepted by API", value: String(format: "%.1f metres", session.continuousAcceptedMeters))
+                    LabeledContent("Cruise running", value: session.cruiseActive ? "Yes" : "No")
+                    Text(session.lastContinuousStatus).font(.footnote)
+                    Text("Distance is calculated from commanded increments that the developer API accepted. It is not an independent distance measurement. Continuous motion pauses if Roam enters the background; the previous GPS coordinate is not cleared.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 Section("Coordinates") {
                     LabeledContent("Last requested", value: coordinateText(session.lastRequestedCoordinate))
