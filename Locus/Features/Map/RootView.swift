@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreLocation
 import NetworkExtension
 
 // Roam v0.5: a branded interface over the original, unchanged GPS engine.

@@ -1,0 +1,15 @@
+Roam v0.13 — Codemagic compile fix (November 4, 2026)
+
+Codemagic error:
+  Locus/Features/Map/RootView.swift:454:38: error: cannot find type 'CLLocationCoordinate2D' in scope
+
+Correction: Added `import CoreLocation` at the top of RootView.swift, immediately after `import SwiftUI`.
+No engine, paired tunnel, VPN, joystick or simulation behaviour was modified.
+
+PATCH ZIP: Extract into your existing v0.13 repository ROOT, overwriting
+  Locus/Features/Map/RootView.swift
+Commit and push, then re-run your Codemagic roam-ios-unsigned workflow.
+
+FULL ZIP: If you prefer, replace the repository contents with the full fixed source.
+As before, this source has only been syntax-parsed locally; Apple's full iOS SDK build has not been run here.
+Preserve your working v0.12 build and source.
