@@ -32,8 +32,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.roam.beanywhere.cellularresearch
         PRODUCT_NAME: Roam
-        MARKETING_VERSION: "0.14.0"
-        CURRENT_PROJECT_VERSION: "14"
+        MARKETING_VERSION: "0.16.0"
+        CURRENT_PROJECT_VERSION: "16"
         INFOPLIST_FILE: Locus/Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: Locus/Resources/Locus.entitlements
         CODE_SIGN_STYLE: Automatic
