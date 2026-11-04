@@ -5,6 +5,7 @@ import NetworkExtension
 // Roam v0.5: a branded interface over the original, unchanged GPS engine.
 struct RootView: View {
     @EnvironmentObject private var session: SpoofSession
+    @EnvironmentObject private var pairing: PairingStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSettings = false
     @State private var showPlaces = false
@@ -25,7 +26,12 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPlaces) { PlacesView() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background { session.applicationEnteredBackground() }
+            switch phase {
+            case .background: session.applicationEnteredBackground()
+            case .inactive: session.applicationBecameInactive()
+            case .active: session.applicationBecameActive(pairing: pairing)
+            @unknown default: break
+            }
         }
         .alert("Roam", isPresented: Binding(
             get: { session.lastError != nil },
@@ -347,7 +353,7 @@ struct BottomControlsView: View {
                             .foregroundStyle(RoamPalette.turquoise)
                             .frame(maxWidth: .infinity)
                     }
-                    Text("Continuous movement is tested in the foreground. Switch to Apple Maps after the 20-second trial ends; compare the blue dot independently.")
+                    Text("v0.15: Movement pauses on background entry; unfinished cruise resumes when Roam is reopened. Apple Maps will not show live movement while Roam is suspended.")
                         .font(.system(size: 10))
                         .foregroundStyle(RoamPalette.muted)
                 }
@@ -502,15 +508,28 @@ private struct MovementDiagnosticsView: View {
                     Text(session.lastMovementResult)
                         .font(.footnote)
                 }
-                Section("Continuous movement (v0.14)") {
+                Section("Continuous movement (v0.15)") {
                     LabeledContent("Accepted movement updates", value: String(session.continuousAcceptedTicks))
                     LabeledContent("Failed movement updates", value: String(session.continuousFailedTicks))
                     LabeledContent("Distance accepted by API", value: String(format: "%.1f metres", session.continuousAcceptedMeters))
                     LabeledContent("Cruise running", value: session.cruiseActive ? "Yes" : "No")
                     Text(session.lastContinuousStatus).font(.footnote)
-                    Text("Distance is calculated from commanded increments that the developer API accepted. It is not an independent distance measurement. Continuous motion pauses if Roam enters the background; the previous GPS coordinate is not cleared.")
+                    Text("Background execution is not guaranteed by iOS. Cruise pauses on background entry and resumes for the remaining duration only when Roam becomes active. These logs do not imply GPS changes were sent while Apple Maps was open.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                Section("App lifecycle (v0.15)") {
+                    LabeledContent("Scene", value: session.lastLifecycleState)
+                    LabeledContent("Paused cruise", value: session.pausedCruiseSeconds.map { "\(Int(ceil($0))) seconds remaining" } ?? "None")
+                    if let when = session.lastBackgroundAt {
+                        LabeledContent("Last backgrounded", value: when.formatted(date: .abbreviated, time: .standard))
+                    }
+                    if let when = session.lastForegroundAt {
+                        LabeledContent("Last foregrounded", value: when.formatted(date: .abbreviated, time: .standard))
+                    }
+                    ForEach(session.lifecycleEvents.prefix(12), id: \.self) { event in
+                        Text(event).font(.caption2).textSelection(.enabled)
+                    }
                 }
                 Section("Coordinates") {
                     LabeledContent("Last requested", value: coordinateText(session.lastRequestedCoordinate))

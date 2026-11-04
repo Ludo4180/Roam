@@ -109,6 +109,13 @@ final class SpoofSession: ObservableObject {
     @Published private(set) var continuousAcceptedTicks = 0
     @Published private(set) var continuousFailedTicks = 0
     @Published private(set) var lastContinuousStatus = "No continuous movement attempted"
+    // v0.15: foreground/background lifecycle events and explicitly paused cruise.
+    // We do NOT attempt location simulation while the app is backgrounded.
+    @Published private(set) var lifecycleEvents: [String] = []
+    @Published private(set) var lastLifecycleState = "Not observed"
+    @Published private(set) var lastBackgroundAt: Date?
+    @Published private(set) var lastForegroundAt: Date?
+    @Published private(set) var pausedCruiseSeconds: TimeInterval?
 
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
@@ -179,18 +186,59 @@ final class SpoofSession: ObservableObject {
     /// Stops the joystick or route without clearing Apple's simulated location.
     /// This is safe to use before switching to a new teleport target.
     func pauseMovement() {
+        pausedCruiseSeconds = nil
         routeTask?.cancel()
         routeTask = nil
         stopJoystick()
         stopCruise(reason: "Movement paused; last accepted GPS coordinate retained")
     }
 
-    /// Foreground-only: if the user switches to Apple Maps mid-movement,
-    /// stop sending updates without clearing the established developer handle.
+    private func logLifecycle(_ message: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        lifecycleEvents.insert("\(timestamp) | \(message)", at: 0)
+        if lifecycleEvents.count > 50 { lifecycleEvents.removeLast(lifecycleEvents.count - 50) }
+    }
+
+    /// iOS suspends ordinary timers in the background. Record this as an explicit
+    /// pause; never claim a background location command was sent successfully.
     func applicationEnteredBackground() {
-        guard joystickActive || cruiseActive else { return }
-        pauseMovement()
-        lastContinuousStatus = "App backgrounded: movement paused; GPS session not cleared"
+        lastLifecycleState = "Background"
+        lastBackgroundAt = Date()
+        logLifecycle("Entered background; cruise=\(cruiseActive), joystick=\(joystickActive), session=\(LocationEngine.isSessionActive)")
+        if cruiseActive {
+            let remaining = max(0, (cruiseDeadlineUptime ?? ProcessInfo.processInfo.systemUptime) - ProcessInfo.processInfo.systemUptime)
+            stopCruise(reason: "Paused in background, \(Int(ceil(remaining)))s remaining")
+            pausedCruiseSeconds = remaining > 0 ? remaining : nil
+            logLifecycle("Cruise paused with \(String(format: "%.1f", remaining)) seconds remaining; no background GPS commands")
+        }
+        if joystickActive {
+            stopJoystick()
+            logLifecycle("Joystick stopped on background entry; restart manually")
+        }
+    }
+
+    func applicationBecameInactive() {
+        lastLifecycleState = "Inactive"
+        logLifecycle("Scene inactive (transition; not necessarily suspended)")
+    }
+
+    /// Resume only the uncompleted trial duration, never the elapsed time spent
+    /// in Apple Maps. The retained session is reused; no new cellular pairing.
+    func applicationBecameActive(pairing: PairingStore) {
+        lastLifecycleState = "Active"
+        lastForegroundAt = Date()
+        let away = lastBackgroundAt.map { Date().timeIntervalSince($0) } ?? 0
+        logLifecycle("Returned active after \(String(format: "%.1f", away))s; retained session=\(LocationEngine.isSessionActive)")
+        guard let remaining = pausedCruiseSeconds else { return }
+        pausedCruiseSeconds = nil
+        guard pairing.hasPairingFile, LocationEngine.isSessionActive, simulated != nil, !isBusy else {
+            lastContinuousStatus = "Could not resume: retained session or pairing unavailable"
+            logLifecycle("Resume skipped: retained session or pairing unavailable")
+            return
+        }
+        beginNorthCruise(duration: remaining, pairing: pairing, resetCounters: false)
+        lastContinuousStatus = "Resumed on foreground; \(Int(ceil(remaining))) seconds remaining"
+        logLifecycle("Cruise resumed on foreground with \(String(format: "%.1f", remaining))s remaining")
     }
 
     /// Explicit END SIMULATION only; should never be used for pause or teleport.
@@ -284,18 +332,27 @@ final class SpoofSession: ObservableObject {
             return
         }
         pauseMovement()
-        resetContinuousCounters()
+        pausedCruiseSeconds = nil
+        beginNorthCruise(duration: 20, pairing: pairing, resetCounters: true)
+    }
+
+    private func beginNorthCruise(duration: TimeInterval, pairing: PairingStore, resetCounters: Bool) {
+        if resetCounters { resetContinuousCounters() }
+        lastMovementTickUptime = nil // never count background time as movement
         cruiseActive = true
-        cruiseSecondsRemaining = 20
-        lastContinuousStatus = "Moving north for 20 seconds at \(travelMode.title) preset"
-        cruiseDeadlineUptime = ProcessInfo.processInfo.systemUptime + 20
+        cruiseSecondsRemaining = Int(ceil(duration))
+        lastContinuousStatus = "Moving north for \(Int(ceil(duration))) seconds at \(travelMode.title) preset"
+        cruiseDeadlineUptime = ProcessInfo.processInfo.systemUptime + duration
         cruiseTimer = Timer.scheduledTimer(withTimeInterval: movementTickInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.tickCruise(pairing: pairing) }
         }
     }
 
     func stopCruise(reason: String = "Cruise stopped — last accepted position held") {
-        guard cruiseActive || cruiseTimer != nil else { return }
+        guard cruiseActive || cruiseTimer != nil else {
+            pausedCruiseSeconds = nil
+            return
+        }
         cruiseActive = false
         cruiseTimer?.invalidate()
         cruiseTimer = nil
@@ -356,11 +413,14 @@ final class SpoofSession: ObservableObject {
             "\(fmt.string(from: $0.timestamp)) | \($0.action) | \($0.succeeded ? "API accepted" : "API failed") | \($0.detail)"
         }.joined(separator: "\n")
         return """
-        Roam v0.14 movement diagnostics
+        Roam v0.15 movement and lifecycle diagnostics
         Status: \(status.label)
         Retained location handle: \(LocationEngine.isSessionActive ? "present (not independently validated)" : "absent")
         Attempts: \(movementAttempts), accepted: \(movementAccepted), failed: \(movementFailed)
         Continuous trial: \(lastContinuousStatus)
+        Lifecycle: \(lastLifecycleState)
+        Background cruise remainder: \(pausedCruiseSeconds.map { String(format: "%.1fs", $0) } ?? "none")
+        Lifecycle history:\n\(lifecycleEvents.isEmpty ? "none" : lifecycleEvents.joined(separator: "\n"))
         Continuous API-accepted distance: \(String(format: "%.1f", continuousAcceptedMeters)) m
         Continuous ticks: \(continuousAcceptedTicks) accepted, \(continuousFailedTicks) failed
         Cruise active: \(cruiseActive), remaining seconds: \(cruiseSecondsRemaining)
