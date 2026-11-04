@@ -159,6 +159,8 @@ struct BottomControlsView: View {
     @Binding var showSettings: Bool
     @Binding var showPlaces: Bool
     @State private var confirmEndSimulation = false
+    @State private var showMovementDiagnostics = false
+    @State private var joystickOnRight = false
 
     private var speedCaption: String {
         String(format: "%.0f km/h preset", session.travelMode.baseSpeed * 3.6)
@@ -179,10 +181,26 @@ struct BottomControlsView: View {
                             .foregroundStyle(RoamPalette.muted)
                     }
                     .font(.system(size: 11, weight: .bold))
-                    JoystickPad { vector in session.updateJoystick(vector: vector) }
-                        .frame(width: 150, height: 150)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
+                    HStack(spacing: 12) {
+                        if joystickOnRight { Spacer(minLength: 4) }
+                        JoystickPad { vector in session.updateJoystick(vector: vector) }
+                            .frame(width: 102, height: 102)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button {
+                                joystickOnRight.toggle()
+                            } label: {
+                                Label(joystickOnRight ? "Move left" : "Move right", systemImage: "arrow.left.arrow.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .buttonStyle(.bordered)
+                            Text(session.lastMovementResult)
+                                .font(.system(size: 10))
+                                .foregroundStyle(RoamPalette.muted)
+                                .lineLimit(3)
+                        }
+                        if !joystickOnRight { Spacer(minLength: 4) }
+                    }
+                    .padding(.vertical, 2)
                 }
                 .padding(13)
                 .roamSurface(cornerRadius: 22)
@@ -273,6 +291,46 @@ struct BottomControlsView: View {
                 }
 
                 if session.isSpoofing {
+                    // v0.13: deterministic single movement using the retained GPS handle.
+                    HStack(spacing: 8) {
+                        Button {
+                            session.stepNorth200(pairing: pairing)
+                        } label: {
+                            Label("Step 200 m N", systemImage: "arrow.up")
+                                .font(.system(size: 11, weight: .bold))
+                                .frame(maxWidth: .infinity, minHeight: 38)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(RoamPalette.electricBlue)
+                        .disabled(session.isBusy)
+
+                        Button {
+                            session.holdPosition()
+                        } label: {
+                            Label("Hold position", systemImage: "hand.raised.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .frame(maxWidth: .infinity, minHeight: 38)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(session.isBusy)
+                    }
+                }
+
+                Button {
+                    showMovementDiagnostics = true
+                } label: {
+                    HStack {
+                        Label("GPS movement diagnostics", systemImage: "waveform.path.ecg")
+                        Spacer()
+                        Text("\(session.movementAccepted)/\(session.movementAttempts) API accepted")
+                        Image(systemName: "chevron.right")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(RoamPalette.turquoise)
+                }
+                .buttonStyle(.plain)
+
+                if session.isSpoofing {
                     HStack(spacing: 10) {
                         Button {
                             session.pauseMovement()
@@ -306,6 +364,10 @@ struct BottomControlsView: View {
             }
             .padding(15)
             .roamSurface(cornerRadius: 25)
+        }
+        .sheet(isPresented: $showMovementDiagnostics) {
+            MovementDiagnosticsView()
+                .environmentObject(session)
         }
         .confirmationDialog(
             "End GPS simulation?",
@@ -379,5 +441,91 @@ struct IconButton: View {
         .buttonStyle(.plain)
         .locusGlass(.interactive, in: Circle())
         .foregroundStyle(.primary)
+    }
+}
+
+// Roam v0.13: developer-API acknowledgements are explicitly labelled. The
+// Roam CLLocation observation can be stale or simulated, so Apple Maps remains
+// the separate check for system-wide movement.
+private struct MovementDiagnosticsView: View {
+    @EnvironmentObject private var session: SpoofSession
+    @Environment(\.dismiss) private var dismiss
+
+    private func coordinateText(_ c: CLLocationCoordinate2D?) -> String {
+        guard let c else { return "Not available" }
+        return String(format: "%.7f, %.7f", c.latitude, c.longitude)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Movement commands") {
+                    LabeledContent("Attempted", value: String(session.movementAttempts))
+                    LabeledContent("API accepted", value: String(session.movementAccepted))
+                    LabeledContent("API failed", value: String(session.movementFailed))
+                    Text(session.lastMovementResult)
+                        .font(.footnote)
+                }
+                Section("Coordinates") {
+                    LabeledContent("Last requested", value: coordinateText(session.lastRequestedCoordinate))
+                    LabeledContent("Last API-accepted", value: coordinateText(session.lastAcceptedCoordinate))
+                    LabeledContent("Roam CoreLocation callback", value: coordinateText(session.lastObservedCoordinate))
+                    if let when = session.lastObservedAt {
+                        LabeledContent("Callback timestamp", value: when.formatted(date: .omitted, time: .standard))
+                    }
+                    Text("The requested location is not a measurement. An API success means the developer-service call returned successfully; neither it nor Roam's CoreLocation callback proves Apple Maps moved. Check Apple Maps after the 200 m step.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Section("Retained session") {
+                    LabeledContent("Location handle", value: LocationEngine.isSessionActive ? "Present (unverified)" : "Absent")
+                    LabeledContent("Last engine stage", value: LocationEngine.lastStage)
+                    if LocationEngine.lastFailure != "none" {
+                        Text(LocationEngine.lastFailure)
+                            .font(.caption)
+                            .textSelection(.enabled)
+                    }
+                }
+                Section("Recent movements") {
+                    if session.movementEvents.isEmpty {
+                        Text("No movement commands recorded").foregroundStyle(.secondary)
+                    }
+                    ForEach(session.movementEvents) { event in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(event.action).font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text(event.succeeded ? "API accepted" : "Failed")
+                                    .foregroundStyle(event.succeeded ? .green : .red)
+                                    .font(.caption)
+                            }
+                            Text(event.timestamp.formatted(date: .omitted, time: .standard))
+                                .font(.caption2).foregroundStyle(.secondary)
+                            Text(event.detail).font(.caption).foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                Section {
+                    Button {
+                        UIPasteboard.general.string = session.movementDiagnosticReport()
+                    } label: {
+                        Label("Copy diagnostic report", systemImage: "doc.on.doc")
+                    }
+                    Button("Clear local diagnostic history", role: .destructive) {
+                        session.clearMovementDiagnostics()
+                    }
+                } footer: {
+                    Text("Copying includes coordinates and connection errors. Review the report before sharing. Clearing diagnostics does not end a location session.")
+                }
+            }
+            .navigationTitle("Movement diagnostics")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }

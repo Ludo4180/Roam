@@ -45,6 +45,15 @@ enum TravelMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// Local diagnostic events only. No pairing material or identifiers are saved.
+struct MovementDiagnosticEvent: Identifiable {
+    let id = UUID()
+    let timestamp: Date
+    let action: String
+    let succeeded: Bool
+    let detail: String
+}
+
 enum SpoofStatus: Equatable {
     case idle
     case connecting
@@ -81,6 +90,18 @@ final class SpoofSession: ObservableObject {
     // Reports the local API result; Apple Maps is the external verification.
     @Published private(set) var lastTeleportResult = "No teleport attempted in this session"
 
+    // v0.13: distinguish requested positions from API acknowledgements and
+    // from independent CoreLocation callbacks (which are NOT proof of Apple Maps).
+    @Published private(set) var lastRequestedCoordinate: CLLocationCoordinate2D?
+    @Published private(set) var lastAcceptedCoordinate: CLLocationCoordinate2D?
+    @Published private(set) var lastObservedCoordinate: CLLocationCoordinate2D?
+    @Published private(set) var lastObservedAt: Date?
+    @Published private(set) var movementAttempts = 0
+    @Published private(set) var movementAccepted = 0
+    @Published private(set) var movementFailed = 0
+    @Published private(set) var lastMovementResult = "No movement commands attempted"
+    @Published private(set) var movementEvents: [MovementDiagnosticEvent] = []
+
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
 
@@ -101,6 +122,12 @@ final class SpoofSession: ObservableObject {
     init() {
         favorites = SavedPlace.load(key: favoritesKey)
         recents = SavedPlace.load(key: recentsKey)
+        locationKeeper.onLocationUpdate = { [weak self] location in
+            Task { @MainActor [weak self] in
+                self?.lastObservedCoordinate = location.coordinate
+                self?.lastObservedAt = location.timestamp
+            }
+        }
     }
 
     var isSpoofing: Bool {
@@ -124,6 +151,8 @@ final class SpoofSession: ObservableObject {
         let usedRetainedSession = LocationEngine.isSessionActive
         pin = coordinate
         let succeeded = apply(coordinate, pairing: pairing, markRecent: true)
+        recordMovement(action: usedRetainedSession ? "Retained teleport" : "Initial teleport",
+                       coordinate: coordinate, succeeded: succeeded)
         if succeeded {
             lastTeleportResult = usedRetainedSession
                 ? "Persistent teleport sent through the retained session — verify in Apple Maps"
@@ -188,9 +217,14 @@ final class SpoofSession: ObservableObject {
             return
         }
         if simulated == nil {
-            apply(start, pairing: pairing, markRecent: false)
+            let opened = apply(start, pairing: pairing, markRecent: false)
+            recordMovement(action: "Joystick initial location", coordinate: start, succeeded: opened)
+            // If the developer service was unreachable, do not make the
+            // joystick appear active when there is no simulation to move.
+            guard opened else { return }
         }
         joystickActive = true
+        lastMovementResult = "Joystick ready; drag to send movements"
         joystickTimer?.invalidate()
         joystickTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -208,6 +242,81 @@ final class SpoofSession: ObservableObject {
         joystickVector = .zero
         joystickTimer?.invalidate()
         joystickTimer = nil
+    }
+
+    /// Keep the last successfully sent position; do NOT clear GPS or reconnect.
+    func holdPosition() {
+        pauseMovement()
+        lastMovementResult = "Hold: movement stopped; the last accepted location was not cleared"
+    }
+
+    /// Single deterministic movement, so Apple Maps can be checked after
+    /// leaving Roam. Requires an existing session; never opens a fresh tunnel.
+    func stepNorth200(pairing: PairingStore) {
+        guard !isBusy, LocationEngine.isSessionActive, let current = simulated else {
+            lastMovementResult = "Step blocked: establish a working teleport session first"
+            lastError = "Start a working teleport on Wi-Fi, then retry the 200 m step using the retained session."
+            return
+        }
+        pauseMovement()
+        let next = offset(coordinate: current, eastMeters: 0, northMeters: 200)
+        let succeeded = apply(next, pairing: pairing, markRecent: false)
+        recordMovement(action: "Step north 200 m", coordinate: next, succeeded: succeeded)
+    }
+
+    func clearMovementDiagnostics() {
+        movementAttempts = 0
+        movementAccepted = 0
+        movementFailed = 0
+        movementEvents.removeAll()
+        lastMovementResult = "Diagnostics reset; simulation unchanged"
+    }
+
+    /// For copying into troubleshooting notes; coordinates are included only
+    /// by explicit user action. Pairing files and secrets are never included.
+    func movementDiagnosticReport() -> String {
+        let fmt = ISO8601DateFormatter()
+        let coordinate: (CLLocationCoordinate2D?) -> String = { c in
+            guard let c else { return "none" }
+            return String(format: "%.7f, %.7f", c.latitude, c.longitude)
+        }
+        let observedTime = lastObservedAt.map { fmt.string(from: $0) } ?? "none"
+        let rows = movementEvents.map {
+            "\(fmt.string(from: $0.timestamp)) | \($0.action) | \($0.succeeded ? "API accepted" : "API failed") | \($0.detail)"
+        }.joined(separator: "\n")
+        return """
+        Roam v0.13 movement diagnostics
+        Status: \(status.label)
+        Retained location handle: \(LocationEngine.isSessionActive ? "present (not independently validated)" : "absent")
+        Attempts: \(movementAttempts), accepted: \(movementAccepted), failed: \(movementFailed)
+        Last requested: \(coordinate(lastRequestedCoordinate))
+        Last API-accepted: \(coordinate(lastAcceptedCoordinate))
+        Latest Roam CoreLocation callback: \(coordinate(lastObservedCoordinate)) at \(observedTime)
+        CoreLocation callbacks are not independent verification by Apple Maps.
+        Engine stage: \(LocationEngine.lastStage)
+        Engine failure: \(LocationEngine.lastFailure)
+        Recent events:
+        \(rows.isEmpty ? "none" : rows)
+        """
+    }
+
+    private func recordMovement(action: String, coordinate: CLLocationCoordinate2D, succeeded: Bool) {
+        movementAttempts += 1
+        lastRequestedCoordinate = coordinate
+        if succeeded {
+            movementAccepted += 1
+            lastAcceptedCoordinate = coordinate
+        } else {
+            movementFailed += 1
+        }
+        let detail = succeeded
+            ? "location_simulation_set returned success (not independently verified)"
+            : "\(LocationEngine.lastStage): \(LocationEngine.lastFailure)"
+        lastMovementResult = "\(action): \(succeeded ? "API accepted" : "API failed")"
+        movementEvents.insert(MovementDiagnosticEvent(
+            timestamp: Date(), action: action, succeeded: succeeded, detail: detail
+        ), at: 0)
+        if movementEvents.count > 60 { movementEvents.removeLast(movementEvents.count - 60) }
     }
 
     func followRoute(_ coordinates: [CLLocationCoordinate2D], pairing: PairingStore) {
@@ -372,7 +481,8 @@ final class SpoofSession: ObservableObject {
         let dt = 0.25
         let meters = speed * dt
         let next = offset(coordinate: current, eastMeters: nx * meters, northMeters: ny * meters)
-        apply(next, pairing: pairing, markRecent: false)
+        let succeeded = apply(next, pairing: pairing, markRecent: false)
+        recordMovement(action: "Joystick \(travelMode.title)", coordinate: next, succeeded: succeeded)
     }
 
     private func startResend(pairing: PairingStore) {

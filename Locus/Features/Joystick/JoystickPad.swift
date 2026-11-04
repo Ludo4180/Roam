@@ -4,7 +4,8 @@ struct JoystickPad: View {
     var onChange: (CGVector) -> Void
 
     @State private var dragOffset: CGSize = .zero
-    private let radius: CGFloat = 52
+    // Smaller than v0.12 so Apple Maps remains visible behind the controls.
+    private let radius: CGFloat = 35
 
     var body: some View {
         ZStack {
@@ -18,7 +19,7 @@ struct JoystickPad: View {
 
             Circle()
                 .fill(LocusTheme.accent)
-                .frame(width: 44, height: 44)
+                .frame(width: 34, height: 34)
                 .shadow(color: LocusTheme.accent.opacity(0.45), radius: 8)
                 .offset(dragOffset)
                 .gesture(

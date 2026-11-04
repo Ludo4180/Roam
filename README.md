@@ -1,3 +1,5 @@
+> **Roam v0.13 experimental source (2026-11-03):** GPS 200 m step, live movement diagnostics, compact joystick and Hold Position, retaining v0.12 cellular handover. See **[ROAM_V0.13_BUILD_AND_TEST.md](ROAM_V0.13_BUILD_AND_TEST.md)**. This is unsigned source code, not a verified iPhone build.
+
 > **Roam v0.12 experimental source (2026-11-03):** For the actual Roam build changes, Codemagic steps and controlled cellular tests, start with **[ROAM_V0.12_BUILD_AND_TEST.md](ROAM_V0.12_BUILD_AND_TEST.md)**. The document below is the retained upstream Locus project README; its install/release links and bundle ID do **not** describe the experimental Roam v0.12 package.
 
 # Locus
