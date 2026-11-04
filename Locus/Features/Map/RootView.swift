@@ -353,7 +353,7 @@ struct BottomControlsView: View {
                             .foregroundStyle(RoamPalette.turquoise)
                             .frame(maxWidth: .infinity)
                     }
-                    Text("v0.15: Movement pauses on background entry; unfinished cruise resumes when Roam is reopened. Apple Maps will not show live movement while Roam is suspended.")
+                    Text("v0.16: Audited handover. Movement pauses when Roam is backgrounded; remaining cruise resumes on return. Diagnostics show the exact time away and a hypothetical (not transmitted) travel distance.")
                         .font(.system(size: 10))
                         .foregroundStyle(RoamPalette.muted)
                 }
@@ -508,7 +508,7 @@ private struct MovementDiagnosticsView: View {
                     Text(session.lastMovementResult)
                         .font(.footnote)
                 }
-                Section("Continuous movement (v0.15)") {
+                Section("Continuous movement (v0.16)") {
                     LabeledContent("Accepted movement updates", value: String(session.continuousAcceptedTicks))
                     LabeledContent("Failed movement updates", value: String(session.continuousFailedTicks))
                     LabeledContent("Distance accepted by API", value: String(format: "%.1f metres", session.continuousAcceptedMeters))
@@ -518,9 +518,20 @@ private struct MovementDiagnosticsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Section("App lifecycle (v0.15)") {
+                Section("App lifecycle (v0.16)") {
                     LabeledContent("Scene", value: session.lastLifecycleState)
                     LabeledContent("Paused cruise", value: session.pausedCruiseSeconds.map { "\(Int(ceil($0))) seconds remaining" } ?? "None")
+                    LabeledContent("Background entries", value: String(session.backgroundTransitions))
+                    LabeledContent("Last time away", value: String(format: "%.1f seconds", session.lastAwaySeconds))
+                    LabeledContent("Foreground recoveries", value: String(session.foregroundResumeCount))
+                    if let when = session.lastMovementCommandAt {
+                        LabeledContent("Last accepted command", value: when.formatted(date: .omitted, time: .standard))
+                    }
+                    Text(session.lastHandoverNote).font(.footnote)
+                    LabeledContent("Hypothetical distance while away", value: String(format: "%.1f m (not sent)", session.hypotheticalAwayMeters))
+                    Text("The hypothetical distance is for comparison only. Roam deliberately does NOT send simulated GPS commands while another app is active. Apple Maps will not show live travel during that pause.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     if let when = session.lastBackgroundAt {
                         LabeledContent("Last backgrounded", value: when.formatted(date: .abbreviated, time: .standard))
                     }

@@ -116,6 +116,21 @@ final class SpoofSession: ObservableObject {
     @Published private(set) var lastBackgroundAt: Date?
     @Published private(set) var lastForegroundAt: Date?
     @Published private(set) var pausedCruiseSeconds: TimeInterval?
+    // v0.16: explicit, non-simulating handover audit. No invented background GPS updates.
+    @Published private(set) var backgroundTransitions = 0
+    @Published private(set) var lastAwaySeconds: TimeInterval = 0
+    @Published private(set) var lastHandoverRequestedMeters: Double = 0
+    @Published private(set) var lastHandoverAcceptedTicks = 0
+    @Published private(set) var lastHandoverNote = "No app handover measured"
+    @Published private(set) var lastMovementCommandAt: Date?
+    @Published private(set) var foregroundResumeCount = 0
+    @Published private(set) var lastResumeAt: Date?
+    // A purely hypothetical distance at the selected speed: never sent to iOS.
+    @Published private(set) var hypotheticalAwayMeters: Double = 0
+    private var handoverStartMeters = 0.0
+    private var handoverStartAcceptedTicks = 0
+    private var backgroundCruiseSpeed: CLLocationSpeed = 0
+    private var lastBackgroundStartForAudit: Date?
 
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
@@ -204,6 +219,11 @@ final class SpoofSession: ObservableObject {
     func applicationEnteredBackground() {
         lastLifecycleState = "Background"
         lastBackgroundAt = Date()
+        lastBackgroundStartForAudit = lastBackgroundAt
+        backgroundTransitions += 1
+        handoverStartMeters = continuousAcceptedMeters
+        handoverStartAcceptedTicks = continuousAcceptedTicks
+        backgroundCruiseSpeed = cruiseActive ? travelMode.baseSpeed : 0
         logLifecycle("Entered background; cruise=\(cruiseActive), joystick=\(joystickActive), session=\(LocationEngine.isSessionActive)")
         if cruiseActive {
             let remaining = max(0, (cruiseDeadlineUptime ?? ProcessInfo.processInfo.systemUptime) - ProcessInfo.processInfo.systemUptime)
@@ -227,7 +247,16 @@ final class SpoofSession: ObservableObject {
     func applicationBecameActive(pairing: PairingStore) {
         lastLifecycleState = "Active"
         lastForegroundAt = Date()
-        let away = lastBackgroundAt.map { Date().timeIntervalSince($0) } ?? 0
+        let away = lastBackgroundStartForAudit.map { Date().timeIntervalSince($0) } ?? 0
+        if let _ = lastBackgroundStartForAudit {
+            lastAwaySeconds = away
+            hypotheticalAwayMeters = max(0, away * backgroundCruiseSpeed)
+            lastHandoverRequestedMeters = max(0, continuousAcceptedMeters - handoverStartMeters)
+            lastHandoverAcceptedTicks = max(0, continuousAcceptedTicks - handoverStartAcceptedTicks)
+            lastHandoverNote = String(format: "Away %.1fs; GPS updates intentionally paused; hypothetical travel %.1fm NOT sent", away, hypotheticalAwayMeters)
+            logLifecycle(lastHandoverNote)
+            lastBackgroundStartForAudit = nil
+        }
         logLifecycle("Returned active after \(String(format: "%.1f", away))s; retained session=\(LocationEngine.isSessionActive)")
         guard let remaining = pausedCruiseSeconds else { return }
         pausedCruiseSeconds = nil
@@ -237,6 +266,8 @@ final class SpoofSession: ObservableObject {
             return
         }
         beginNorthCruise(duration: remaining, pairing: pairing, resetCounters: false)
+        foregroundResumeCount += 1
+        lastResumeAt = Date()
         lastContinuousStatus = "Resumed on foreground; \(Int(ceil(remaining))) seconds remaining"
         logLifecycle("Cruise resumed on foreground with \(String(format: "%.1f", remaining))s remaining")
     }
@@ -413,13 +444,19 @@ final class SpoofSession: ObservableObject {
             "\(fmt.string(from: $0.timestamp)) | \($0.action) | \($0.succeeded ? "API accepted" : "API failed") | \($0.detail)"
         }.joined(separator: "\n")
         return """
-        Roam v0.15 movement and lifecycle diagnostics
+        Roam v0.16 movement and lifecycle diagnostics
         Status: \(status.label)
         Retained location handle: \(LocationEngine.isSessionActive ? "present (not independently validated)" : "absent")
         Attempts: \(movementAttempts), accepted: \(movementAccepted), failed: \(movementFailed)
         Continuous trial: \(lastContinuousStatus)
         Lifecycle: \(lastLifecycleState)
         Background cruise remainder: \(pausedCruiseSeconds.map { String(format: "%.1fs", $0) } ?? "none")
+        Background entries: \(backgroundTransitions)
+        Last time away: \(String(format: "%.1fs", lastAwaySeconds))
+        Foreground cruise resumes: \(foregroundResumeCount)
+        Latest return audit: \(lastHandoverNote)
+        Hypothetical background travel (NOT SENT): \(String(format: "%.1fm", hypotheticalAwayMeters))
+        Last accepted movement command time: \(lastMovementCommandAt.map { fmt.string(from: $0) } ?? "none")
         Lifecycle history:\n\(lifecycleEvents.isEmpty ? "none" : lifecycleEvents.joined(separator: "\n"))
         Continuous API-accepted distance: \(String(format: "%.1f", continuousAcceptedMeters)) m
         Continuous ticks: \(continuousAcceptedTicks) accepted, \(continuousFailedTicks) failed
@@ -438,6 +475,7 @@ final class SpoofSession: ObservableObject {
 
     private func recordMovement(action: String, coordinate: CLLocationCoordinate2D, succeeded: Bool, extra: String = "") {
         movementAttempts += 1
+        if succeeded { lastMovementCommandAt = Date() }
         lastRequestedCoordinate = coordinate
         if succeeded {
             movementAccepted += 1

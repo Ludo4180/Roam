@@ -1,3 +1,5 @@
+> **Roam v0.16 diagnostic source (2026-11-04):** Adds background/foreground handover audit, last accepted update time, paused-duration metrics and clearly labelled hypothetical distance while away. Preserves v0.15 foreground cruise recovery. No GPS updates are claimed while backgrounded. See [ROAM_V0.16_BUILD_AND_TEST.md](ROAM_V0.16_BUILD_AND_TEST.md). Codemagic iOS compilation not yet verified.
+
 > **Roam v0.14 experimental source (2026-11-04):** Foreground joystick cadence improvements and 20-second north movement trial with API diagnostics; retains v0.13 step test and v0.12 Wi-Fi→cellular re-teleportation. See [ROAM_V0.14_BUILD_AND_TEST.md](ROAM_V0.14_BUILD_AND_TEST.md). Unsigned source, not an iOS-tested binary.
 
 > **Roam v0.13 experimental source (2026-11-03):** GPS 200 m step, live movement diagnostics, compact joystick and Hold Position, retaining v0.12 cellular handover. See **[ROAM_V0.13_BUILD_AND_TEST.md](ROAM_V0.13_BUILD_AND_TEST.md)**. This is unsigned source code, not a verified iPhone build.
