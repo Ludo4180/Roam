@@ -109,8 +109,8 @@ final class SpoofSession: ObservableObject {
     @Published private(set) var continuousAcceptedTicks = 0
     @Published private(set) var continuousFailedTicks = 0
     @Published private(set) var lastContinuousStatus = "No continuous movement attempted"
-    // v0.15: foreground/background lifecycle events and explicitly paused cruise.
-    // We do NOT attempt location simulation while the app is backgrounded.
+    // v0.15/16: lifecycle audit and recoverable foreground cruise remain unchanged.
+    // v0.17 adds a separately requested, finite background experiment.
     @Published private(set) var lifecycleEvents: [String] = []
     @Published private(set) var lastLifecycleState = "Not observed"
     @Published private(set) var lastBackgroundAt: Date?
@@ -131,6 +131,21 @@ final class SpoofSession: ObservableObject {
     private var handoverStartAcceptedTicks = 0
     private var backgroundCruiseSpeed: CLLocationSpeed = 0
     private var lastBackgroundStartForAudit: Date?
+    // v0.17: measured, opt-in short background task. API acknowledgements do
+    // not independently establish that Apple Maps visibly moved.
+    @Published private(set) var backgroundTrialStatus = "Not attempted"
+    @Published private(set) var backgroundTrialAttempts = 0
+    @Published private(set) var backgroundTrialAccepted = 0
+    @Published private(set) var backgroundTrialFailed = 0
+    @Published private(set) var backgroundTrialAcceptedMeters = 0.0
+    @Published private(set) var backgroundTrialExpirations = 0
+    @Published private(set) var lastBackgroundTrialCommandAt: Date?
+    @Published private(set) var backgroundTrialTaskHeld = false
+    private var backgroundTrialEnabled = false
+    private var actuallyInBackground = false
+    private var handoverWasExperimental = false
+    private var handoverInitialBgAccepted = 0
+    private var handoverInitialBgAttempts = 0
 
     @Published var favorites: [SavedPlace] = []
     @Published var recents: [SavedPlace] = []
@@ -146,7 +161,7 @@ final class SpoofSession: ObservableObject {
     private var lastMovementTickUptime: TimeInterval?
     private let movementTickInterval: TimeInterval = 0.8
     private var routeTask: Task<Void, Never>?
-    private var backgroundTask = UIBackgroundTaskIdentifier.invalid
+    private var shortCruiseTask = UIBackgroundTaskIdentifier.invalid
     private var joystickVector: CGVector = .zero
     private let locationKeeper = BackgroundKeepAlive()
 
@@ -214,9 +229,11 @@ final class SpoofSession: ObservableObject {
         if lifecycleEvents.count > 50 { lifecycleEvents.removeLast(lifecycleEvents.count - 50) }
     }
 
-    /// iOS suspends ordinary timers in the background. Record this as an explicit
-    /// pause; never claim a background location command was sent successfully.
+    /// The original cruise continues to pause as before. ONLY the explicit
+    /// short background trial may attempt updates in another app, and only
+    /// while a finite UIApplication background task remains valid.
     func applicationEnteredBackground() {
+        actuallyInBackground = true
         lastLifecycleState = "Background"
         lastBackgroundAt = Date()
         lastBackgroundStartForAudit = lastBackgroundAt
@@ -224,12 +241,20 @@ final class SpoofSession: ObservableObject {
         handoverStartMeters = continuousAcceptedMeters
         handoverStartAcceptedTicks = continuousAcceptedTicks
         backgroundCruiseSpeed = cruiseActive ? travelMode.baseSpeed : 0
-        logLifecycle("Entered background; cruise=\(cruiseActive), joystick=\(joystickActive), session=\(LocationEngine.isSessionActive)")
+        handoverWasExperimental = cruiseActive && backgroundTrialEnabled
+        handoverInitialBgAccepted = backgroundTrialAccepted
+        handoverInitialBgAttempts = backgroundTrialAttempts
+        logLifecycle("Entered background; cruise=\(cruiseActive), experimental=\(backgroundTrialEnabled), task=\(shortCruiseTask != .invalid), session=\(LocationEngine.isSessionActive)")
         if cruiseActive {
-            let remaining = max(0, (cruiseDeadlineUptime ?? ProcessInfo.processInfo.systemUptime) - ProcessInfo.processInfo.systemUptime)
-            stopCruise(reason: "Paused in background, \(Int(ceil(remaining)))s remaining")
-            pausedCruiseSeconds = remaining > 0 ? remaining : nil
-            logLifecycle("Cruise paused with \(String(format: "%.1f", remaining)) seconds remaining; no background GPS commands")
+            if backgroundTrialEnabled && shortCruiseTask != .invalid {
+                backgroundTrialStatus = "Background entered; awaiting timer/API evidence"
+                logLifecycle("Experimental 20s cruise requested to continue in background; iOS execution not guaranteed")
+            } else {
+                let remaining = max(0, (cruiseDeadlineUptime ?? ProcessInfo.processInfo.systemUptime) - ProcessInfo.processInfo.systemUptime)
+                stopCruise(reason: "Paused in background, \(Int(ceil(remaining)))s remaining")
+                pausedCruiseSeconds = remaining > 0 ? remaining : nil
+                logLifecycle("Cruise paused with \(String(format: "%.1f", remaining))s remaining; no background commands")
+            }
         }
         if joystickActive {
             stopJoystick()
@@ -245,17 +270,25 @@ final class SpoofSession: ObservableObject {
     /// Resume only the uncompleted trial duration, never the elapsed time spent
     /// in Apple Maps. The retained session is reused; no new cellular pairing.
     func applicationBecameActive(pairing: PairingStore) {
+        actuallyInBackground = false
         lastLifecycleState = "Active"
         lastForegroundAt = Date()
         let away = lastBackgroundStartForAudit.map { Date().timeIntervalSince($0) } ?? 0
-        if let _ = lastBackgroundStartForAudit {
+        if lastBackgroundStartForAudit != nil {
             lastAwaySeconds = away
             hypotheticalAwayMeters = max(0, away * backgroundCruiseSpeed)
             lastHandoverRequestedMeters = max(0, continuousAcceptedMeters - handoverStartMeters)
             lastHandoverAcceptedTicks = max(0, continuousAcceptedTicks - handoverStartAcceptedTicks)
-            lastHandoverNote = String(format: "Away %.1fs; GPS updates intentionally paused; hypothetical travel %.1fm NOT sent", away, hypotheticalAwayMeters)
+            if handoverWasExperimental {
+                let bgAttempts = max(0, backgroundTrialAttempts - handoverInitialBgAttempts)
+                let bgAccepted = max(0, backgroundTrialAccepted - handoverInitialBgAccepted)
+                lastHandoverNote = String(format: "Away %.1fs; background API attempts %d, accepted %d; API acknowledgement is NOT Apple Maps verification", away, bgAttempts, bgAccepted)
+            } else {
+                lastHandoverNote = String(format: "Away %.1fs; standard cruise paused; hypothetical travel %.1fm NOT sent", away, hypotheticalAwayMeters)
+            }
             logLifecycle(lastHandoverNote)
             lastBackgroundStartForAudit = nil
+            handoverWasExperimental = false
         }
         logLifecycle("Returned active after \(String(format: "%.1f", away))s; retained session=\(LocationEngine.isSessionActive)")
         guard let remaining = pausedCruiseSeconds else { return }
@@ -285,7 +318,7 @@ final class SpoofSession: ObservableObject {
             simulated = nil
             lastTeleportResult = "Simulation ended; real GPS should resume"
             status = .idle
-            endBackground()
+            endShortCruiseTask()
             // Keep location updates running so the map puck / locate button
             // can return to the real GPS fix (not the leftover pin).
             locationKeeper.start()
@@ -356,15 +389,44 @@ final class SpoofSession: ObservableObject {
     /// LocationEngine.set/apply path as the successful 200m GPS step.
     /// Only an ALREADY retained developer session may be used.
     func startNorthCruise20(pairing: PairingStore) {
+        guard canStartRetainedCruise(pairing: pairing) else { return }
+        pauseMovement()
+        pausedCruiseSeconds = nil
+        beginNorthCruise(duration: 20, pairing: pairing, resetCounters: true)
+    }
+
+    /// v0.17 opt-in experiment only. Request finite background execution
+    /// BEFORE starting the 20s task, not after entering the background.
+    func startBackgroundCruise20(pairing: PairingStore) {
+        guard canStartRetainedCruise(pairing: pairing) else { return }
+        pauseMovement()
+        pausedCruiseSeconds = nil
+        backgroundTrialAttempts = 0
+        backgroundTrialAccepted = 0
+        backgroundTrialFailed = 0
+        backgroundTrialAcceptedMeters = 0
+        backgroundTrialExpirations = 0
+        lastBackgroundTrialCommandAt = nil
+        backgroundTrialStatus = "Requesting finite iOS background task"
+        guard beginShortCruiseTask() else {
+            backgroundTrialStatus = "iOS did not grant the background task; no experimental cruise started"
+            logLifecycle(backgroundTrialStatus)
+            return
+        }
+        backgroundTrialEnabled = true
+        beginNorthCruise(duration: 20, pairing: pairing, resetCounters: true)
+        backgroundTrialStatus = "20s experimental cruise started; switch to Apple Maps"
+        logLifecycle("Experimental 20s background cruise started in foreground")
+    }
+
+    private func canStartRetainedCruise(pairing: PairingStore) -> Bool {
         guard !isBusy, pairing.hasPairingFile,
               LocationEngine.isSessionActive, simulated != nil else {
             lastMovementResult = "Cruise blocked: establish an initial Wi-Fi teleport first"
             lastError = "A retained simulation is required. Start a successful teleport on Wi-Fi before the 4G movement trial."
-            return
+            return false
         }
-        pauseMovement()
-        pausedCruiseSeconds = nil
-        beginNorthCruise(duration: 20, pairing: pairing, resetCounters: true)
+        return true
     }
 
     private func beginNorthCruise(duration: TimeInterval, pairing: PairingStore, resetCounters: Bool) {
@@ -380,8 +442,11 @@ final class SpoofSession: ObservableObject {
     }
 
     func stopCruise(reason: String = "Cruise stopped — last accepted position held") {
+        let wasExperimental = backgroundTrialEnabled
         guard cruiseActive || cruiseTimer != nil else {
             pausedCruiseSeconds = nil
+            backgroundTrialEnabled = false
+            endShortCruiseTask()
             return
         }
         cruiseActive = false
@@ -391,6 +456,12 @@ final class SpoofSession: ObservableObject {
         lastMovementTickUptime = nil
         cruiseSecondsRemaining = 0
         lastContinuousStatus = reason
+        backgroundTrialEnabled = false
+        endShortCruiseTask()
+        if wasExperimental {
+            backgroundTrialStatus = "Trial ended: \(reason); background API accepted \(backgroundTrialAccepted)/\(backgroundTrialAttempts)"
+            logLifecycle(backgroundTrialStatus)
+        }
     }
 
     private func resetContinuousCounters() {
@@ -429,6 +500,15 @@ final class SpoofSession: ObservableObject {
         resetContinuousCounters()
         lastMovementResult = "Diagnostics reset; simulation unchanged"
         lastContinuousStatus = "Continuous counters reset; simulation unchanged"
+        if !cruiseActive {
+            backgroundTrialAttempts = 0
+            backgroundTrialAccepted = 0
+            backgroundTrialFailed = 0
+            backgroundTrialAcceptedMeters = 0
+            backgroundTrialExpirations = 0
+            lastBackgroundTrialCommandAt = nil
+            backgroundTrialStatus = "Diagnostic counters reset; location simulation unchanged"
+        }
     }
 
     /// For copying into troubleshooting notes; coordinates are included only
@@ -444,11 +524,17 @@ final class SpoofSession: ObservableObject {
             "\(fmt.string(from: $0.timestamp)) | \($0.action) | \($0.succeeded ? "API accepted" : "API failed") | \($0.detail)"
         }.joined(separator: "\n")
         return """
-        Roam v0.16 movement and lifecycle diagnostics
+        Roam v0.17 movement and lifecycle diagnostics
         Status: \(status.label)
         Retained location handle: \(LocationEngine.isSessionActive ? "present (not independently validated)" : "absent")
         Attempts: \(movementAttempts), accepted: \(movementAccepted), failed: \(movementFailed)
         Continuous trial: \(lastContinuousStatus)
+        v0.17 short background trial: \(backgroundTrialStatus)
+        Short background task currently held: \(backgroundTrialTaskHeld)
+        Background-location API attempts: \(backgroundTrialAttempts), accepted: \(backgroundTrialAccepted), failed: \(backgroundTrialFailed)
+        Background requested meters acknowledged by API: \(String(format: "%.1f", backgroundTrialAcceptedMeters)) m (not independently verified)
+        Background task expirations: \(backgroundTrialExpirations)
+        Last background GPS command: \(lastBackgroundTrialCommandAt.map { fmt.string(from: $0) } ?? "none")
         Lifecycle: \(lastLifecycleState)
         Background cruise remainder: \(pausedCruiseSeconds.map { String(format: "%.1fs", $0) } ?? "none")
         Background entries: \(backgroundTransitions)
@@ -621,7 +707,8 @@ final class SpoofSession: ObservableObject {
             pin = coordinate
             status = .active
             lastError = nil
-            beginBackground()
+            // Do not hold an unlimited UIApplication background assertion for
+            // the entire simulation. The v0.17 trial has its OWN finite task.
             locationKeeper.start()
             if automaticRetriesEnabled {
                 startResend(pairing: pairing)
@@ -665,6 +752,13 @@ final class SpoofSession: ObservableObject {
             stopCruise(reason: "20-second trial completed; last API-accepted coordinate held")
             return
         }
+        // A background timer firing is NOT permission to continue unless the
+        // specifically scoped experiment still has a valid UIKit assertion.
+        if actuallyInBackground && (!backgroundTrialEnabled || shortCruiseTask == .invalid) {
+            stopCruise(reason: "Background assertion unavailable; trial paused")
+            pausedCruiseSeconds = remaining
+            return
+        }
         cruiseSecondsRemaining = Int(ceil(remaining))
         sendContinuousMovement(vector: CGVector(dx: 0, dy: -1),
                                label: "Cruise north \(travelMode.title)", pairing: pairing)
@@ -694,13 +788,27 @@ final class SpoofSession: ObservableObject {
         let next = offset(coordinate: current,
                           eastMeters: vector.dx / magnitude * meters,
                           northMeters: -vector.dy / magnitude * meters)
+        let wasBackgroundTrialTick = actuallyInBackground && backgroundTrialEnabled
         let succeeded = apply(next, pairing: pairing, markRecent: false)
-        recordMovement(action: label, coordinate: next, succeeded: succeeded,
-                       extra: String(format: "dt %.2f s, requested %.2f m", dt, meters))
+        let actionLabel = wasBackgroundTrialTick ? "BACKGROUND \(label)" : label
+        recordMovement(action: actionLabel, coordinate: next, succeeded: succeeded,
+                       extra: String(format: "dt %.2f s, requested %.2f m; scene background=%@", dt, meters, wasBackgroundTrialTick ? "yes" : "no"))
+        if wasBackgroundTrialTick {
+            backgroundTrialAttempts += 1
+            lastBackgroundTrialCommandAt = Date()
+            if succeeded {
+                backgroundTrialAccepted += 1
+                backgroundTrialAcceptedMeters += meters
+            } else {
+                backgroundTrialFailed += 1
+            }
+            backgroundTrialStatus = "Background location API \(succeeded ? "accepted" : "failed") at \(lastBackgroundTrialCommandAt?.formatted(date: .omitted, time: .standard) ?? "unknown")"
+            logLifecycle("Background GPS command \(succeeded ? "accepted" : "FAILED"); requested \(String(format: "%.2f", meters))m")
+        }
         if succeeded {
             continuousAcceptedTicks += 1
             continuousAcceptedMeters += meters
-            lastContinuousStatus = String(format: "%@: accepted %d updates, %.1f m requested/accepted by API", label, continuousAcceptedTicks, continuousAcceptedMeters)
+            lastContinuousStatus = String(format: "%@: accepted %d updates, %.1f m requested/accepted by API", actionLabel, continuousAcceptedTicks, continuousAcceptedMeters)
         } else {
             continuousFailedTicks += 1
             lastContinuousStatus = "\(label): API failed — movement stopped; session handle not cleared"
@@ -778,17 +886,35 @@ final class SpoofSession: ObservableObject {
         SavedPlace.save(recents, key: recentsKey)
     }
 
-    private func beginBackground() {
-        guard backgroundTask == .invalid else { return }
-        backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
-            self?.endBackground()
+    /// A finite UIKit assertion associated only with the opt-in 20s trial.
+    /// Apple's expiration callback is always balanced by endBackgroundTask.
+    /// It is not an entitlement for indefinite background location spoofing.
+    private func beginShortCruiseTask() -> Bool {
+        guard shortCruiseTask == .invalid else { return true }
+        let identifier = UIApplication.shared.beginBackgroundTask(withName: "Roam 20s background cruise") { [weak self] in
+            guard let self else { return }
+            self.backgroundTrialExpirations += 1
+            let remaining = max(0, (self.cruiseDeadlineUptime ?? ProcessInfo.processInfo.systemUptime) - ProcessInfo.processInfo.systemUptime)
+            self.logLifecycle("iOS background task expired; stopping updates with \(String(format: "%.1f", remaining))s trial remaining")
+            self.stopCruise(reason: "iOS background task expired; no more background updates")
+            self.pausedCruiseSeconds = remaining > 0 ? remaining : nil
         }
+        guard identifier != .invalid else {
+            backgroundTrialTaskHeld = false
+            return false
+        }
+        shortCruiseTask = identifier
+        backgroundTrialTaskHeld = true
+        logLifecycle("Finite 20s background assertion requested while foreground")
+        return true
     }
 
-    private func endBackground() {
-        guard backgroundTask != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(backgroundTask)
-        backgroundTask = .invalid
+    private func endShortCruiseTask() {
+        guard shortCruiseTask != .invalid else { return }
+        let identifier = shortCruiseTask
+        shortCruiseTask = .invalid
+        backgroundTrialTaskHeld = false
+        UIApplication.shared.endBackgroundTask(identifier)
     }
 
     private func postDropNotification(_ message: String) {

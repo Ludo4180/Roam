@@ -1,3 +1,11 @@
+# Roam v0.17 — Short background cruise research build
+
+**New:** opt-in 20-second iOS background execution experiment, with background-only GPS API counters, expiry handling, and the standard foreground cruise preserved. Version 0.17.0 (17). This is a diagnostic **source build**, not a verified live background movement feature.
+
+**Build/test instructions:** [ROAM_V0.17_BUILD_AND_TEST.md](ROAM_V0.17_BUILD_AND_TEST.md)
+
+---
+
 > **Roam v0.16 diagnostic source (2026-11-04):** Adds background/foreground handover audit, last accepted update time, paused-duration metrics and clearly labelled hypothetical distance while away. Preserves v0.15 foreground cruise recovery. No GPS updates are claimed while backgrounded. See [ROAM_V0.16_BUILD_AND_TEST.md](ROAM_V0.16_BUILD_AND_TEST.md). Codemagic iOS compilation not yet verified.
 
 > **Roam v0.14 experimental source (2026-11-04):** Foreground joystick cadence improvements and 20-second north movement trial with API diagnostics; retains v0.13 step test and v0.12 Wi-Fi→cellular re-teleportation. See [ROAM_V0.14_BUILD_AND_TEST.md](ROAM_V0.14_BUILD_AND_TEST.md). Unsigned source, not an iOS-tested binary.

@@ -353,7 +353,19 @@ struct BottomControlsView: View {
                             .foregroundStyle(RoamPalette.turquoise)
                             .frame(maxWidth: .infinity)
                     }
-                    Text("v0.16: Audited handover. Movement pauses when Roam is backgrounded; remaining cruise resumes on return. Diagnostics show the exact time away and a hypothetical (not transmitted) travel distance.")
+                    if !session.cruiseActive {
+                        Button {
+                            session.startBackgroundCruise20(pairing: pairing)
+                        } label: {
+                            Label("Try 20s background cruise (experimental)", systemImage: "square.on.square")
+                                .font(.system(size: 11, weight: .semibold))
+                                .frame(maxWidth: .infinity, minHeight: 40)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(RoamPalette.turquoise)
+                        .disabled(session.isBusy)
+                    }
+                    Text("v0.17: Standard cruise pauses and resumes as before. The separate experimental 20s cruise requests LIMITED iOS background time. It may be denied, suspended or expired; verify movement in Apple Maps.")
                         .font(.system(size: 10))
                         .foregroundStyle(RoamPalette.muted)
                 }
@@ -508,17 +520,31 @@ private struct MovementDiagnosticsView: View {
                     Text(session.lastMovementResult)
                         .font(.footnote)
                 }
-                Section("Continuous movement (v0.16)") {
+                Section("Continuous movement (v0.17)") {
                     LabeledContent("Accepted movement updates", value: String(session.continuousAcceptedTicks))
                     LabeledContent("Failed movement updates", value: String(session.continuousFailedTicks))
                     LabeledContent("Distance accepted by API", value: String(format: "%.1f metres", session.continuousAcceptedMeters))
                     LabeledContent("Cruise running", value: session.cruiseActive ? "Yes" : "No")
                     Text(session.lastContinuousStatus).font(.footnote)
-                    Text("Background execution is not guaranteed by iOS. Cruise pauses on background entry and resumes for the remaining duration only when Roam becomes active. These logs do not imply GPS changes were sent while Apple Maps was open.")
+                    Text("The standard cruise pauses on background entry. Only the explicitly started experimental 20s trial attempts location updates while Roam is backgrounded, and only while the finite iOS task is allowed to run.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Section("App lifecycle (v0.16)") {
+                Section("Experimental background cruise (v0.17)") {
+                    LabeledContent("Background task held", value: session.backgroundTrialTaskHeld ? "Yes" : "No")
+                    LabeledContent("Background commands attempted", value: String(session.backgroundTrialAttempts))
+                    LabeledContent("Background API accepted", value: String(session.backgroundTrialAccepted))
+                    LabeledContent("Background API failed", value: String(session.backgroundTrialFailed))
+                    LabeledContent("Background API-accepted distance", value: String(format: "%.1f metres", session.backgroundTrialAcceptedMeters))
+                    LabeledContent("Task expirations", value: String(session.backgroundTrialExpirations))
+                    if let when = session.lastBackgroundTrialCommandAt {
+                        LabeledContent("Last background command", value: when.formatted(date: .omitted, time: .standard))
+                    }
+                    Text(session.backgroundTrialStatus).font(.footnote)
+                    Text("These counters count actual attempted developer-service calls while Roam reported background state; success is an API acknowledgement, NOT independent confirmation that Apple Maps moved. iOS may suspend the app before the trial finishes.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("App lifecycle (v0.17)") {
                     LabeledContent("Scene", value: session.lastLifecycleState)
                     LabeledContent("Paused cruise", value: session.pausedCruiseSeconds.map { "\(Int(ceil($0))) seconds remaining" } ?? "None")
                     LabeledContent("Background entries", value: String(session.backgroundTransitions))
@@ -529,7 +555,7 @@ private struct MovementDiagnosticsView: View {
                     }
                     Text(session.lastHandoverNote).font(.footnote)
                     LabeledContent("Hypothetical distance while away", value: String(format: "%.1f m (not sent)", session.hypotheticalAwayMeters))
-                    Text("The hypothetical distance is for comparison only. Roam deliberately does NOT send simulated GPS commands while another app is active. Apple Maps will not show live travel during that pause.")
+                    Text("Hypothetical distance is an estimate, never transmitted as a catch-up command. During the separately selected experiment, individual GPS updates MAY be attempted in the background. See the background-command counters above.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let when = session.lastBackgroundAt {
