@@ -354,18 +354,27 @@ struct BottomControlsView: View {
                             .frame(maxWidth: .infinity)
                     }
                     if !session.cruiseActive {
-                        Button {
-                            session.startBackgroundCruise20(pairing: pairing)
-                        } label: {
-                            Label("Try 20s background cruise (experimental)", systemImage: "square.on.square")
-                                .font(.system(size: 11, weight: .semibold))
-                                .frame(maxWidth: .infinity, minHeight: 40)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("BACKGROUND CRUISE — LIMITED EXPERIMENT")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(RoamPalette.turquoise)
+                            HStack(spacing: 8) {
+                                ForEach([20, 30, 60], id: \.self) { duration in
+                                    Button {
+                                        session.startBackgroundCruise(duration: duration, pairing: pairing)
+                                    } label: {
+                                        Text("\(duration)s")
+                                            .font(.system(size: 12, weight: .bold))
+                                            .frame(maxWidth: .infinity, minHeight: 40)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(RoamPalette.turquoise)
+                                    .disabled(session.isBusy)
+                                }
+                            }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(RoamPalette.turquoise)
-                        .disabled(session.isBusy)
                     }
-                    Text("v0.17: Standard cruise pauses and resumes as before. The separate experimental 20s cruise requests LIMITED iOS background time. It may be denied, suspended or expired; verify movement in Apple Maps.")
+                    Text("v0.18: Try 20s again as baseline, then 30s, then 60s. A single finite UIKit background task may expire or be suspended at any time. Standard cruise is unchanged. Watch Apple Maps and check command gaps/expiry logs.")
                         .font(.system(size: 10))
                         .foregroundStyle(RoamPalette.muted)
                 }
@@ -520,17 +529,22 @@ private struct MovementDiagnosticsView: View {
                     Text(session.lastMovementResult)
                         .font(.footnote)
                 }
-                Section("Continuous movement (v0.17)") {
+                Section("Continuous movement (v0.18)") {
                     LabeledContent("Accepted movement updates", value: String(session.continuousAcceptedTicks))
                     LabeledContent("Failed movement updates", value: String(session.continuousFailedTicks))
                     LabeledContent("Distance accepted by API", value: String(format: "%.1f metres", session.continuousAcceptedMeters))
                     LabeledContent("Cruise running", value: session.cruiseActive ? "Yes" : "No")
                     Text(session.lastContinuousStatus).font(.footnote)
-                    Text("The standard cruise pauses on background entry. Only the explicitly started experimental 20s trial attempts location updates while Roam is backgrounded, and only while the finite iOS task is allowed to run.")
+                    Text("The standard cruise pauses on background entry. Only a separately started experimental 20/30/60s trial attempts location updates while Roam is backgrounded, and only while the finite iOS task is allowed to run.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Section("Experimental background cruise (v0.17)") {
+                Section("Extended background cruise (v0.18)") {
+                    LabeledContent("Planned trial duration", value: "\(session.backgroundTrialPlannedSeconds) seconds")
+                    LabeledContent("Measured trial elapsed", value: String(format: "%.1f seconds", session.backgroundTrialActualSeconds))
+                    LabeledContent("End reason", value: session.backgroundTrialEndReason)
+                    LabeledContent("Longest command gap", value: String(format: "%.2f seconds", session.backgroundTrialLongestTickGap))
+                    LabeledContent("Gaps over 2.5s", value: String(session.backgroundTrialLargeTickGaps))
                     LabeledContent("Background task held", value: session.backgroundTrialTaskHeld ? "Yes" : "No")
                     LabeledContent("Background commands attempted", value: String(session.backgroundTrialAttempts))
                     LabeledContent("Background API accepted", value: String(session.backgroundTrialAccepted))
@@ -541,10 +555,10 @@ private struct MovementDiagnosticsView: View {
                         LabeledContent("Last background command", value: when.formatted(date: .omitted, time: .standard))
                     }
                     Text(session.backgroundTrialStatus).font(.footnote)
-                    Text("These counters count actual attempted developer-service calls while Roam reported background state; success is an API acknowledgement, NOT independent confirmation that Apple Maps moved. iOS may suspend the app before the trial finishes.")
+                    Text("These are API acknowledgements, not Apple Maps verification. Gaps over 2.5s indicate delayed updates. A 60s request does not grant 60s of execution: iOS may suspend or expire the task earlier.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("App lifecycle (v0.17)") {
+                Section("App lifecycle (v0.18)") {
                     LabeledContent("Scene", value: session.lastLifecycleState)
                     LabeledContent("Paused cruise", value: session.pausedCruiseSeconds.map { "\(Int(ceil($0))) seconds remaining" } ?? "None")
                     LabeledContent("Background entries", value: String(session.backgroundTransitions))
