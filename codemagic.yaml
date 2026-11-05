@@ -1,6 +1,6 @@
 workflows:
   roam-ios-unsigned:
-    name: Roam v0.18 - extended background cruise trials (Release)
+    name: Roam v0.19 - long-duration background reliability trials (Release)
     max_build_duration: 60
     instance_type: mac_mini_m2
     environment:
@@ -32,9 +32,9 @@ workflows:
           test -d "$APP"
           VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
           BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")
-          echo "Built Roam $VERSION ($BUILD); expecting Roam 0.18.0 (17)"
-          test "$VERSION" = "0.18.0"
-          test "$BUILD" = "18"
+          echo "Built Roam $VERSION ($BUILD); expecting Roam 0.19.0 (19)"
+          test "$VERSION" = "0.19.0"
+          test "$BUILD" = "19"
           test -f "$APP/Roam"
       - name: Package unsigned IPA for signing in iLoader
         script: |
@@ -42,9 +42,9 @@ workflows:
           APP="$CM_BUILD_DIR/DerivedData/Build/Products/Release-iphoneos/Roam.app"
           mkdir -p "$CM_BUILD_DIR/Payload"
           cp -R "$APP" "$CM_BUILD_DIR/Payload/Roam.app"
-          (cd "$CM_BUILD_DIR" && zip -qr roam-v0.18-unsigned.ipa Payload)
-          test -f "$CM_BUILD_DIR/roam-v0.18-unsigned.ipa"
+          (cd "$CM_BUILD_DIR" && zip -qr roam-v0.19-unsigned.ipa Payload)
+          test -f "$CM_BUILD_DIR/roam-v0.19-unsigned.ipa"
     artifacts:
       - roam-build.log
-      - roam-v0.18-unsigned.ipa
+      - roam-v0.19-unsigned.ipa
       - DerivedData/Build/Products/Release-iphoneos/*.app
