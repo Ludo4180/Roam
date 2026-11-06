@@ -1,9 +1,11 @@
-# Roam v0.18 — Extended Background Cruise Research
+# Roam v0.20 — Minimisable Map Controls
 
-Built from the experimentally successful v0.17 source. **20s, 30s, and 60s** user-selected trials share the already-tested location-update path. Each trial requests one finite iOS background task; iOS may suspend or expire it early. No unconditional background modes or indefinite-execution claims.
+A map-usability release based on **Roam v0.19**, preserving the proven retained developer session, Wi-Fi-to-cellular re-teleportation, joystick and finite background cruise experiments. It does not change the developer tunnel or location-simulation algorithms.
 
-The original 20s standard foreground cruise, Wi-Fi initial teleport, retained cellular teleport, diagnostics and LocalDevVPN handling are preserved in source, but this new build has **not** yet been compiled by Codemagic or tested on iPhone.
+**New:** after teleport, controls collapse into a small **Expand · Diagnostics · Re-teleport** bar so you can tap a new destination on the map. Expand for the regular controls; minimise the expanded panel or the diagnostic sheet without ending simulation. The expanded panel is scrollable and no longer covers the whole map.
 
-Version: **0.18.0 (18)**. Workflow: `roam-ios-unsigned`. Output: `roam-v0.18-unsigned.ipa`.
+**Version:** `0.20.0 (20)`  
+**Codemagic workflow:** `roam-ios-unsigned`  
+**Expected artifact:** `roam-v0.20-unsigned.ipa`
 
-See [ROAM_V0.18_BUILD_AND_TEST.md](ROAM_V0.18_BUILD_AND_TEST.md).
+See [ROAM_V0.20_BUILD_AND_TEST.md](ROAM_V0.20_BUILD_AND_TEST.md) for installation and testing. Local syntax/configuration validation is **not equivalent to an iOS build**; use Codemagic and iPhone testing to confirm functionality. Keep v0.19 backed up.

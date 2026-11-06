@@ -146,9 +146,13 @@ final class SpoofSession: ObservableObject {
     @Published private(set) var backgroundTrialLongestTickGap = 0.0
     @Published private(set) var backgroundTrialLargeTickGaps = 0
     @Published private(set) var backgroundTrialEndReason = "Not attempted"
-    // Time spent actually in app background while an experimental trial runs.
+    // v0.19: measure actual time spent in background, monitor the finite
+    // UIKit runtime allowance, and keep in-memory summaries for repeat tests.
     @Published private(set) var backgroundTrialObservedBackgroundSeconds = 0.0
-    private var backgroundTrialBackgroundStartedUptime: TimeInterval?
+    @Published private(set) var backgroundTrialMinimumBudgetSeconds: Double?
+    @Published private(set) var backgroundTrialBudgetStops = 0
+    @Published private(set) var backgroundTrialHistory: [String] = []
+    private var backgroundTrialBackgroundEntryUptime: TimeInterval?
     private var backgroundTrialStartedUptime: TimeInterval?
     private var backgroundTrialLastTickUptime: TimeInterval?
     private var backgroundTrialEnabled = false
@@ -244,9 +248,6 @@ final class SpoofSession: ObservableObject {
     /// while a finite UIApplication background task remains valid.
     func applicationEnteredBackground() {
         actuallyInBackground = true
-        if cruiseActive && backgroundTrialEnabled && backgroundTrialBackgroundStartedUptime == nil {
-            backgroundTrialBackgroundStartedUptime = ProcessInfo.processInfo.systemUptime
-        }
         lastLifecycleState = "Background"
         lastBackgroundAt = Date()
         lastBackgroundStartForAudit = lastBackgroundAt
@@ -260,6 +261,8 @@ final class SpoofSession: ObservableObject {
         logLifecycle("Entered background; cruise=\(cruiseActive), experimental=\(backgroundTrialEnabled), task=\(shortCruiseTask != .invalid), session=\(LocationEngine.isSessionActive)")
         if cruiseActive {
             if backgroundTrialEnabled && shortCruiseTask != .invalid {
+                backgroundTrialBackgroundEntryUptime = ProcessInfo.processInfo.systemUptime
+                sampleBackgroundTrialBudget()
                 backgroundTrialStatus = "Background entered; awaiting timer/API evidence"
                 logLifecycle("Experimental \(backgroundTrialPlannedSeconds)s cruise requested in background; execution not guaranteed")
             } else {
@@ -283,10 +286,7 @@ final class SpoofSession: ObservableObject {
     /// Resume only the uncompleted trial duration, never the elapsed time spent
     /// in Apple Maps. The retained session is reused; no new cellular pairing.
     func applicationBecameActive(pairing: PairingStore) {
-        if let bgStart = backgroundTrialBackgroundStartedUptime {
-            backgroundTrialObservedBackgroundSeconds += max(0, ProcessInfo.processInfo.systemUptime - bgStart)
-            backgroundTrialBackgroundStartedUptime = nil
-        }
+        closeBackgroundTrialInterval()
         actuallyInBackground = false
         lastLifecycleState = "Active"
         lastForegroundAt = Date()
@@ -415,7 +415,7 @@ final class SpoofSession: ObservableObject {
         beginNorthCruise(duration: 20, pairing: pairing, resetCounters: true)
     }
 
-    /// v0.19: preserved v0.17 path, with explicit finite 20/30/60/90/120/300s tests.
+    /// v0.19: identical v0.17 path, now also selectable for 90, 120, or 300 seconds.
     /// This is ONLY a finite, user-started experiment with an already retained
     /// developer session. It does not request unlimited background operation.
     func startBackgroundCruise(duration: Int, pairing: PairingStore) {
@@ -435,7 +435,8 @@ final class SpoofSession: ObservableObject {
         backgroundTrialLargeTickGaps = 0
         backgroundTrialEndReason = "Running"
         backgroundTrialObservedBackgroundSeconds = 0
-        backgroundTrialBackgroundStartedUptime = nil
+        backgroundTrialMinimumBudgetSeconds = nil
+        backgroundTrialBackgroundEntryUptime = nil
         backgroundTrialLastTickUptime = nil
         backgroundTrialStartedUptime = ProcessInfo.processInfo.systemUptime
         backgroundTrialStatus = "Requesting finite iOS background task for \(duration)s"
@@ -495,18 +496,24 @@ final class SpoofSession: ObservableObject {
         cruiseSecondsRemaining = 0
         lastContinuousStatus = reason
         backgroundTrialEnabled = false
+        if wasExperimental { closeBackgroundTrialInterval() }
         endShortCruiseTask()
         if wasExperimental {
-            if let bgStart = backgroundTrialBackgroundStartedUptime {
-                backgroundTrialObservedBackgroundSeconds += max(0, ProcessInfo.processInfo.systemUptime - bgStart)
-                backgroundTrialBackgroundStartedUptime = nil
-            }
             if let start = backgroundTrialStartedUptime {
                 backgroundTrialActualSeconds = max(0, ProcessInfo.processInfo.systemUptime - start)
             }
             backgroundTrialEndReason = reason
             backgroundTrialStatus = "Trial stopped: \(reason); background API accepted \(backgroundTrialAccepted)/\(backgroundTrialAttempts)"
             logLifecycle(backgroundTrialStatus)
+            let summary = String(format:
+                "%ds trial: elapsed %.1fs (background %.1fs), accepted %d/%d, failures %d, gaps %d, expirations %d; %@",
+                backgroundTrialPlannedSeconds, backgroundTrialActualSeconds,
+                backgroundTrialObservedBackgroundSeconds,
+                backgroundTrialAccepted, backgroundTrialAttempts, backgroundTrialFailed,
+                backgroundTrialLargeTickGaps, backgroundTrialExpirations, reason)
+            let historyEntry = "\(ISO8601DateFormatter().string(from: Date())) | \(summary)"
+            backgroundTrialHistory.insert(historyEntry, at: 0)
+            if backgroundTrialHistory.count > 8 { backgroundTrialHistory.removeLast() }
             backgroundTrialStartedUptime = nil
             backgroundTrialLastTickUptime = nil
         }
@@ -562,7 +569,9 @@ final class SpoofSession: ObservableObject {
             backgroundTrialLargeTickGaps = 0
             backgroundTrialEndReason = "Reset"
             backgroundTrialObservedBackgroundSeconds = 0
-            backgroundTrialBackgroundStartedUptime = nil
+            backgroundTrialMinimumBudgetSeconds = nil
+            backgroundTrialBudgetStops = 0
+            backgroundTrialHistory.removeAll()
         }
     }
 
@@ -579,21 +588,25 @@ final class SpoofSession: ObservableObject {
             "\(fmt.string(from: $0.timestamp)) | \($0.action) | \($0.succeeded ? "API accepted" : "API failed") | \($0.detail)"
         }.joined(separator: "\n")
         return """
-        Roam v0.18 movement and lifecycle diagnostics
+        Roam v0.20 movement and lifecycle diagnostics
         Status: \(status.label)
         Retained location handle: \(LocationEngine.isSessionActive ? "present (not independently validated)" : "absent")
         Attempts: \(movementAttempts), accepted: \(movementAccepted), failed: \(movementFailed)
         Continuous trial: \(lastContinuousStatus)
-        v0.19 finite background trial: \(backgroundTrialStatus)
+        v0.20 finite background trial: \(backgroundTrialStatus)
         Planned trial duration: \(backgroundTrialPlannedSeconds) s
         Recorded trial wall-clock time: \(String(format: "%.1f", backgroundTrialActualSeconds)) s (does not prove continuous execution)
-        Observed background-state wall-clock time: \(String(format: "%.1f", backgroundTrialObservedBackgroundSeconds)) s (not proof of uninterrupted CPU execution)
+        Observed background interval(s): \(String(format: "%.1f", backgroundTrialObservedBackgroundSeconds)) s
+        Minimum observed background-time allowance: \(backgroundTrialMinimumBudgetSeconds.map { String(format: "%.1fs", $0) } ?? "unavailable")
+        Budget-safety stops in this app session: \(backgroundTrialBudgetStops)
         End reason: \(backgroundTrialEndReason)
         Longest observed tick gap: \(String(format: "%.2f", backgroundTrialLongestTickGap)) s; gaps >2.5s: \(backgroundTrialLargeTickGaps)
         Short background task currently held: \(backgroundTrialTaskHeld)
         Background-location API attempts: \(backgroundTrialAttempts), accepted: \(backgroundTrialAccepted), failed: \(backgroundTrialFailed)
         Background requested meters acknowledged by API: \(String(format: "%.1f", backgroundTrialAcceptedMeters)) m (not independently verified)
         Background task expirations: \(backgroundTrialExpirations)
+        Recent trial summaries (in-memory, most recent first):
+        \(backgroundTrialHistory.isEmpty ? "none" : backgroundTrialHistory.joined(separator: "\n"))
         Last background GPS command: \(lastBackgroundTrialCommandAt.map { fmt.string(from: $0) } ?? "none")
         Lifecycle: \(lastLifecycleState)
         Background cruise remainder: \(pausedCruiseSeconds.map { String(format: "%.1fs", $0) } ?? "none")
@@ -808,15 +821,7 @@ final class SpoofSession: ObservableObject {
     private func tickCruise(pairing: PairingStore) {
         guard cruiseActive, let deadline = cruiseDeadlineUptime else { return }
         let remaining = deadline - ProcessInfo.processInfo.systemUptime
-        if backgroundTrialEnabled {
-            recordBackgroundTrialTimerGap()
-            // A long scheduling interruption means the output was not smooth.
-            // Hold the last accepted position instead of silently continuing.
-            if backgroundTrialLongestTickGap > 10.0 {
-                stopCruise(reason: "Timer interruption exceeded 10s; last accepted position held")
-                return
-            }
-        }
+        if backgroundTrialEnabled { recordBackgroundTrialTimerGap() }
         if remaining <= 0 {
             let label = backgroundTrialEnabled ? "\(backgroundTrialPlannedSeconds)s scheduling window elapsed" : "20-second trial completed"
             let caveat = backgroundTrialEnabled && backgroundTrialLargeTickGaps > 0
@@ -828,9 +833,21 @@ final class SpoofSession: ObservableObject {
         // A background timer firing is NOT permission to continue unless the
         // specifically scoped experiment still has a valid UIKit assertion.
         if actuallyInBackground && (!backgroundTrialEnabled || shortCruiseTask == .invalid) {
-            stopCruise(reason: "Background assertion unavailable; trial paused")
-            pausedCruiseSeconds = remaining
+            stopCruise(reason: "Background assertion unavailable; last accepted position held")
+            // An interrupted experiment must not become an unrequested
+            // foreground cruise when the user returns.
+            pausedCruiseSeconds = nil
             return
+        }
+        if actuallyInBackground && backgroundTrialEnabled {
+            sampleBackgroundTrialBudget()
+            // Do not exhaust UIKit's allowance and risk termination. One
+            // finite assertion only; never chain tasks to extend this trial.
+            if let budget = backgroundTrialMinimumBudgetSeconds, budget <= 5.0 {
+                backgroundTrialBudgetStops += 1
+                stopCruise(reason: "Background time allowance low (<=5s); stopped safely before expiry")
+                return
+            }
         }
         cruiseSecondsRemaining = Int(ceil(remaining))
         sendContinuousMovement(vector: CGVector(dx: 0, dy: -1),
@@ -856,6 +873,25 @@ final class SpoofSession: ObservableObject {
             logLifecycle("Experimental cruise timer gap \(String(format: "%.2f", gap))s; possible suspension/interruption")
         }
         backgroundTrialLastTickUptime = now
+    }
+
+    /// Accumulate measured time during background state, not guessed distance.
+    private func closeBackgroundTrialInterval() {
+        guard let entered = backgroundTrialBackgroundEntryUptime else { return }
+        backgroundTrialObservedBackgroundSeconds += max(0, ProcessInfo.processInfo.systemUptime - entered)
+        backgroundTrialBackgroundEntryUptime = nil
+    }
+
+    /// Only meaningful while UIKit has granted a finite background task.
+    /// This value is a reported ceiling, not a guarantee of remaining time.
+    private func sampleBackgroundTrialBudget() {
+        guard actuallyInBackground, backgroundTrialEnabled,
+              shortCruiseTask != .invalid else { return }
+        let remaining = UIApplication.shared.backgroundTimeRemaining
+        guard remaining.isFinite, remaining >= 0, remaining < 86_400 else { return }
+        backgroundTrialMinimumBudgetSeconds = min(
+            backgroundTrialMinimumBudgetSeconds ?? remaining, remaining
+        )
     }
 
     /// Both joystick and timed trial use this same location-simulation API.
@@ -977,7 +1013,7 @@ final class SpoofSession: ObservableObject {
         SavedPlace.save(recents, key: recentsKey)
     }
 
-    /// User-started, finite UIKit assertion for just one 20/30/60/90/120/300s trial.
+    /// User-started, finite UIKit assertion for one 20/30/60/90/120/300s trial.
     /// UIKit may expire it before the desired duration. The expiration handler
     /// must stop the trial and release the assertion, NOT schedule a new one.
     private func beginShortCruiseTask(duration: Int) -> Bool {
@@ -989,7 +1025,7 @@ final class SpoofSession: ObservableObject {
             self.logLifecycle("iOS background task expired; stopping trial with \(String(format: "%.1f", remaining))s scheduled remaining")
             self.stopCruise(reason: "iOS background task expired with \(String(format: "%.1f", remaining))s remaining; no new background task requested")
             // An expired EXPERIMENT must not silently resume as a standard
-            // cruise, which would distort the extended background test result.
+            // cruise, which would distort the 30/60s background test result.
             self.pausedCruiseSeconds = nil
         }
         guard identifier != .invalid else {

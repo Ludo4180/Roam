@@ -1,26 +1,39 @@
-# Roam v0.19 — finite background reliability trials
+# Roam v0.19 — Long-duration background reliability trials
 
-## Purpose
-This experimental build extends the **working v0.18 source** with optional 90-second, 120-second and 300-second trials. The 20-, 30- and 60-second experiments remain available. The existing developer tunnel, pairing and re-teleport implementations are unchanged.
+## Proven baseline and purpose
 
-## Build (Windows + GitHub Desktop + Codemagic)
-1. Back up the v0.18 source and working IPA.
-2. Create a new GitHub branch called `roam-v0.19`.
-3. Copy the contents of the full-source ZIP to the root of the repo (not into a nested folder).
-4. Commit and push the branch.
-5. In Codemagic, select workflow `roam-ios-unsigned` and confirm the branch is `roam-v0.19`.
-6. If successful, download `roam-v0.19-unsigned.ipa`; install using the user's established signing/iLoader workflow.
-7. Verify the build's reported version is **0.19.0 (19)**.
+**v0.18 user test (5 November 2026):** Apple Maps showed the blue location dot moving during 20, 30 and 60-second background trials on cellular after a Wi-Fi-established developer session. The 60-second trial log reported 63/63 accepted background API updates, no failures, zero gaps >2.5 seconds, maximum gap 0.80 seconds and no task expirations. This establishes a **short-duration test result**, not guaranteed future performance, independent 5G-only pairing, or indefinite iOS background execution.
 
-## Experimental test sequence
-1. Begin with a successful Wi-Fi-assisted teleport, keep LocalDevVPN and the simulation session active, then turn Wi-Fi fully off and verify a retained re-teleport on cellular.
-2. Set Drive speed and repeat a 60-second finite background cruise. After a couple seconds, open Apple Maps and observe its blue dot. Return to Roam and export diagnostics.
-3. If 60s remains reliable, test **90 seconds**, then **120 seconds**. The **5-minute** test is optional and should only follow shorter successful tests.
-4. Run one experiment at a time. Do not force quit Roam, press Stop, or start a new paired handshake during a trial.
-5. In diagnostics compare planned duration, measured wall-clock duration, background-state wall-clock duration, background API attempts/accepts/failures, command gaps >2.5s, task expirations and end reason. Check Apple Maps separately.
+**v0.19** keeps the existing 20/30/60-second commands and all pairing/teleport/joystick code. It adds separate **90-second, 120-second (2 minute), and 300-second (5 minute)** user-initiated trials. These are *requested scheduling windows* only. Each trial requests **one finite** `UIApplication.beginBackgroundTask` and never chains or renews tasks to force a longer run.
 
-## Important constraints
-- `beginBackgroundTask` is a *finite* request to finish existing work, **not** a promise of 5 minutes of execution. An expiry stops the experiment; v0.19 never attempts to renew background tasks automatically.
-- Trials stop after a timer gap over 10 seconds rather than claim smooth GPS movement. Requested distance and successful developer-service API responses are **not** independent measurement of real system-wide location; Apple Maps visual observation remains separate evidence.
-- The standard cruise/joystick background policy and Wi-Fi-initialised session pathway are unchanged. Fresh cellular-only initial developer pairing is still unresolved.
-- No on-device build has been executed here; Xcode/Codemagic is the decisive compiler check.
+## Additional diagnostic and safety behaviour
+
+- Stops and holds the last API-accepted simulated coordinate when the iOS expiration handler runs, and ends the background-task identifier.
+- While backgrounded and able to run, samples `UIApplication.backgroundTimeRemaining`; stops safely when the reported allowance is 5 seconds or less. The allowance is not guaranteed and iOS may suspend or terminate even earlier.
+- Captures actual monotonic elapsed test duration, measured intervals in background state, minimum sampled background allowance (if available), longest observed command gap, number of gaps >2.5 seconds, accepted/failed API requests, requested distance, task expirations and safety stops.
+- Retains up to eight short trial summaries **in memory** for comparisons. These summaries disappear when the app restarts; export the diagnostic report before restarting. No pairing file or credentials are included in exported logs. The report *does include simulated coordinates and timestamps*.
+- If interrupted, the experimental trial does **not** automatically resume or open a fresh developer pairing over cellular. Standard foreground cruise and joystick are unchanged.
+
+## Windows -> Codemagic -> iLoader
+
+1. Back up the tested v0.18 repository branch, source and IPA first.
+2. In GitHub Desktop create and publish branch **`roam-v0.19`**, preferably based on v0.18.
+3. Extract the **FULL SOURCE** ZIP into the Git repository root without adding a wrapper directory. Or apply the **PATCH** on top of v0.18 (not v0.17).
+4. Commit and push. In Codemagic choose `roam-v0.19`, workflow `roam-ios-unsigned`.
+5. Step **Verify output version and app structure** should report **Roam 0.19.0 (19)**. Expected unsigned artifact is **`roam-v0.19-unsigned.ipa`**.
+6. Download and install using your existing iLoader method. Do not remove LocalDevVPN or the working backup.
+
+## Test sequence (one experiment at a time)
+
+1. With phone stationary, first confirm initial teleport over Wi-Fi, then disable Wi-Fi **in Settings**, leave 4G/5G on, retain LocalDevVPN and confirm cellular re-teleportation. Do not force-close Roam or restart pairing during handover.
+2. In Roam, select Drive and run the **20s baseline**, switch to Apple Maps after ~3s, watch the blue dot, then return to Roam and export Movement Diagnostics. If the baseline regresses, stop testing and retain v0.18.
+3. Repeat with 60s to establish a comparison. Then run **90s**, **2m**, and only after those, **5m** separately. Keep the iPhone stationary and charging if practical; avoid low-power mode changes during a test. Do not repeatedly launch background tasks to circumvent an iOS expiration.
+4. For each run check planned duration vs elapsed duration, measured background time, last command time, background attempts/accepted/failed, longest gap and gaps >2.5s, task expirations, budget-safety stop, end reason and the corresponding visible movement in Apple Maps.
+5. Record whether the blue dot moved throughout the run, stopped early or jumped to the end. The API acknowledgment **does not independently prove** Apple Maps moved during every second. If the trial stops early, treat that as useful evidence of iOS limits; do not claim the entire duration was successful.
+
+## Limitations / validation
+
+- v0.19 is a research build and may not run for 2 or 5 minutes in the background. Apple can suspend the app, revoke the finite task, or terminate its process; `beginBackgroundTask` is not a continuous-execution entitlement.
+- The project is locally checked for **Swift syntax**, YAML structure, archive integrity and version agreement only. **iOS SDK compilation, real background-time limits and device operation require Codemagic and iPhone testing.**
+- This does not enable initial RPPairing/RSD over cellular without the Wi-Fi-established session.
+- Keep any private pairing documents, signing certificates and API secrets outside Git and ZIPs.

@@ -171,13 +171,91 @@ struct BottomControlsView: View {
     @Binding var showPlaces: Bool
     @State private var confirmEndSimulation = false
     @State private var showMovementDiagnostics = false
+    @State private var controlsMinimized = false
     @State private var joystickOnRight = false
 
     private var speedCaption: String {
         String(format: "%.0f km/h preset", session.travelMode.baseSpeed * 3.6)
     }
 
-    var body: some View {
+    // v0.20: keep the map tappable after a teleport. Hiding controls is a
+    // presentation change only: it must never end or clear the GPS session.
+    private var compactControls: some View {
+        VStack(spacing: 7) {
+        HStack(spacing: 9) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    controlsMinimized = false
+                }
+            } label: {
+                Label("Expand", systemImage: "chevron.up")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(minHeight: 42)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Expand movement controls")
+
+            Button {
+                showMovementDiagnostics = true
+            } label: {
+                Image(systemName: "waveform.path.ecg")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RoamPalette.turquoise)
+                    .frame(width: 40, height: 42)
+                    .background(Color.white.opacity(0.06), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open GPS movement diagnostics")
+
+            Spacer(minLength: 0)
+
+            Button {
+                guard let pin = session.pin else {
+                    session.lastError = "Choose a destination on the map first."
+                    return
+                }
+                session.teleport(to: pin, pairing: pairing)
+            } label: {
+                Label(session.isSpoofing ? "Re-teleport" : "Teleport", systemImage: "location.north.fill")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(RoamPalette.background)
+                    .padding(.horizontal, 13)
+                    .frame(minHeight: 42)
+                    .background(RoamPalette.primaryGradient, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(session.isBusy)
+            .opacity(session.isBusy ? 0.65 : 1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .roamSurface(cornerRadius: 22)
+        if session.cruiseActive {
+            HStack {
+                Text("Cruise in progress")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Button {
+                    session.stopCruise()
+                } label: {
+                    Label("Stop movement", systemImage: "stop.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .roamSurface(cornerRadius: 16)
+        }
+        }
+    }
+
+    // The larger controls live in a separate view expression so the compact map
+    // presentation does not make SwiftUI type-check the entire screen at once.
+    private var expandedControls: some View {
         VStack(spacing: 12) {
             if session.joystickActive {
                 VStack(alignment: .leading, spacing: 6) {
@@ -230,12 +308,26 @@ struct BottomControlsView: View {
                             .foregroundStyle(.white)
                     }
                     Spacer()
-                    Text(speedCaption)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(RoamPalette.turquoise)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(RoamPalette.turquoise.opacity(0.11), in: Capsule())
+                    VStack(alignment: .trailing, spacing: 8) {
+                        Button {
+                            if session.joystickActive { session.stopJoystick() }
+                            withAnimation(.easeInOut(duration: 0.22)) {
+                                controlsMinimized = true
+                            }
+                        } label: {
+                            Label("Minimise", systemImage: "chevron.down")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(RoamPalette.turquoise)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Minimise controls to use the map")
+                        Text(speedCaption)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(RoamPalette.turquoise)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(RoamPalette.turquoise.opacity(0.11), in: Capsule())
+                    }
                 }
 
                 HStack(spacing: 7) {
@@ -284,6 +376,9 @@ struct BottomControlsView: View {
                             return
                         }
                         session.teleport(to: pin, pairing: pairing)
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            controlsMinimized = true
+                        }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "location.north.fill")
@@ -372,7 +467,7 @@ struct BottomControlsView: View {
                                     .disabled(session.isBusy)
                                 }
                             }
-                            Text("LONGER TRIALS — MAY END EARLY")
+                            Text("LONGER-DURATION EXPERIMENTS — MAY END EARLY")
                                 .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(RoamPalette.muted)
                             HStack(spacing: 8) {
@@ -380,7 +475,7 @@ struct BottomControlsView: View {
                                     Button {
                                         session.startBackgroundCruise(duration: duration, pairing: pairing)
                                     } label: {
-                                        Text(duration == 300 ? "5 min" : "\(duration)s")
+                                        Text(duration == 90 ? "90s" : duration == 120 ? "2m" : "5m")
                                             .font(.system(size: 12, weight: .bold))
                                             .frame(maxWidth: .infinity, minHeight: 40)
                                     }
@@ -390,7 +485,7 @@ struct BottomControlsView: View {
                             }
                         }
                     }
-                    Text("v0.19: First repeat 60s; then 90s, 120s and optional 5 min. Each trial uses one finite iOS background task. iOS may expire or suspend it early. No automatic background task renewal. Watch Apple Maps and check gaps and expiry logs.")
+                    Text("v0.20: After teleport, controls minimise so you can tap the map and Re-teleport. Expand to access joystick and 20/30/60/90/120/300s movement trials. Finite background execution can expire early; check the diagnostics.")
                         .font(.system(size: 10))
                         .foregroundStyle(RoamPalette.muted)
                 }
@@ -444,9 +539,40 @@ struct BottomControlsView: View {
             .padding(15)
             .roamSurface(cornerRadius: 25)
         }
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if controlsMinimized {
+                compactControls
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                ScrollView(.vertical) {
+                    expandedControls
+                }
+                .scrollIndicators(.visible)
+                // The entire control panel was obscuring the map; even expanded,
+                // limit its height and let the user scroll through diagnostics.
+                .frame(maxHeight: 450)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .onChange(of: session.isSpoofing) { _, active in
+            if active {
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    controlsMinimized = true
+                }
+            }
+        }
         .sheet(isPresented: $showMovementDiagnostics) {
-            MovementDiagnosticsView()
+            MovementDiagnosticsView(onMinimise: {
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    controlsMinimized = true
+                }
+            })
                 .environmentObject(session)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .confirmationDialog(
             "End GPS simulation?",
@@ -527,6 +653,7 @@ struct IconButton: View {
 // Roam CLLocation observation can be stale or simulated, so Apple Maps remains
 // the separate check for system-wide movement.
 private struct MovementDiagnosticsView: View {
+    let onMinimise: () -> Void
     @EnvironmentObject private var session: SpoofSession
     @Environment(\.dismiss) private var dismiss
 
@@ -545,7 +672,7 @@ private struct MovementDiagnosticsView: View {
                     Text(session.lastMovementResult)
                         .font(.footnote)
                 }
-                Section("Continuous movement (v0.19)") {
+                Section("Continuous movement (v0.20)") {
                     LabeledContent("Accepted movement updates", value: String(session.continuousAcceptedTicks))
                     LabeledContent("Failed movement updates", value: String(session.continuousFailedTicks))
                     LabeledContent("Distance accepted by API", value: String(format: "%.1f metres", session.continuousAcceptedMeters))
@@ -555,10 +682,12 @@ private struct MovementDiagnosticsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Section("Extended background cruise (v0.19)") {
+                Section("Extended background cruise (v0.20)") {
                     LabeledContent("Planned trial duration", value: "\(session.backgroundTrialPlannedSeconds) seconds")
                     LabeledContent("Measured trial elapsed", value: String(format: "%.1f seconds", session.backgroundTrialActualSeconds))
-                    LabeledContent("Time in background state", value: String(format: "%.1f seconds", session.backgroundTrialObservedBackgroundSeconds))
+                    LabeledContent("Observed background time", value: String(format: "%.1f seconds", session.backgroundTrialObservedBackgroundSeconds))
+                    LabeledContent("Lowest background allowance", value: session.backgroundTrialMinimumBudgetSeconds.map { String(format: "%.1f seconds", $0) } ?? "Not available")
+                    LabeledContent("Safe budget stops", value: String(session.backgroundTrialBudgetStops))
                     LabeledContent("End reason", value: session.backgroundTrialEndReason)
                     LabeledContent("Longest command gap", value: String(format: "%.2f seconds", session.backgroundTrialLongestTickGap))
                     LabeledContent("Gaps over 2.5s", value: String(session.backgroundTrialLargeTickGaps))
@@ -572,10 +701,16 @@ private struct MovementDiagnosticsView: View {
                         LabeledContent("Last background command", value: when.formatted(date: .omitted, time: .standard))
                     }
                     Text(session.backgroundTrialStatus).font(.footnote)
-                    Text("These are API acknowledgements, not Apple Maps verification. Gaps over 2.5s indicate delayed updates. Even a 5-minute request does not grant 5 minutes of execution. iOS may suspend or expire the task early; background-state duration does not prove uninterrupted execution.")
+                    if !session.backgroundTrialHistory.isEmpty {
+                        Text("Recent trial summaries").font(.subheadline.weight(.semibold))
+                        ForEach(session.backgroundTrialHistory, id: \.self) { summary in
+                            Text(summary).font(.caption2).textSelection(.enabled)
+                        }
+                    }
+                    Text("These are API acknowledgements, not Apple Maps verification. Gaps over 2.5s indicate delayed updates. A 5-minute request does NOT guarantee 5 minutes of execution; iOS may suspend, expire, or terminate the app earlier.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("App lifecycle (v0.19)") {
+                Section("App lifecycle (v0.20)") {
                     LabeledContent("Scene", value: session.lastLifecycleState)
                     LabeledContent("Paused cruise", value: session.pausedCruiseSeconds.map { "\(Int(ceil($0))) seconds remaining" } ?? "None")
                     LabeledContent("Background entries", value: String(session.backgroundTransitions))
@@ -656,7 +791,10 @@ private struct MovementDiagnosticsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Minimise") {
+                        onMinimise()
+                        dismiss()
+                    }
                 }
             }
         }
