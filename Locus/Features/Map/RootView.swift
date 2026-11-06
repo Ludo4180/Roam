@@ -175,10 +175,10 @@ struct BottomControlsView: View {
     @State private var joystickOnRight = false
 
     private var speedCaption: String {
-        String(format: "%.0f km/h preset", session.travelMode.baseSpeed * 3.6)
+        String(format: "%.0f mph preset", session.travelMode.baseSpeed * 2.2369362921)
     }
 
-    // v0.20: keep the map tappable after a teleport. Hiding controls is a
+    // v0.21: keep the map tappable after a teleport. Hiding controls is a
     // presentation change only: it must never end or clear the GPS session.
     private var compactControls: some View {
         VStack(spacing: 7) {
@@ -297,39 +297,6 @@ struct BottomControlsView: View {
             }
 
             VStack(alignment: .leading, spacing: 13) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("MOVEMENT MODE")
-                            .font(.system(size: 10, weight: .bold))
-                            .tracking(2)
-                            .foregroundStyle(RoamPalette.muted)
-                        Text("Choose your pace")
-                            .font(.system(size: 16, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white)
-                    }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 8) {
-                        Button {
-                            if session.joystickActive { session.stopJoystick() }
-                            withAnimation(.easeInOut(duration: 0.22)) {
-                                controlsMinimized = true
-                            }
-                        } label: {
-                            Label("Minimise", systemImage: "chevron.down")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(RoamPalette.turquoise)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Minimise controls to use the map")
-                        Text(speedCaption)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(RoamPalette.turquoise)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(RoamPalette.turquoise.opacity(0.11), in: Capsule())
-                    }
-                }
-
                 HStack(spacing: 7) {
                     ForEach(TravelMode.allCases) { mode in
                         modeButton(mode)
@@ -485,7 +452,7 @@ struct BottomControlsView: View {
                             }
                         }
                     }
-                    Text("v0.20: After teleport, controls minimise so you can tap the map and Re-teleport. Expand to access joystick and 20/30/60/90/120/300s movement trials. Finite background execution can expire early; check the diagnostics.")
+                    Text("v0.21: The control header stays visible while you scroll. Tap Minimise to select a new map destination; Expand for joystick and 20/30/60/90/120/300s trials. Background execution can end early.")
                         .font(.system(size: 10))
                         .foregroundStyle(RoamPalette.muted)
                 }
@@ -536,9 +503,51 @@ struct BottomControlsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel(session.lastTeleportResult)
             }
-            .padding(15)
-            .roamSurface(cornerRadius: 25)
+            // The outer panel owns the surface and rounded clipping; the
+            // scrollable contents must not draw a second card that gets cut off.
         }
+    }
+
+    // v0.21: Keep the title, current speed and minimise control fixed. Only
+    // the movement options scroll within the rounded card below this header.
+    // This prevents the top of the controls appearing chopped off on scroll.
+    private var expandedControlsHeader: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("MOVEMENT MODE")
+                    .font(.system(size: 10, weight: .bold))
+                    .tracking(2)
+                    .foregroundStyle(RoamPalette.muted)
+                Spacer()
+                Button {
+                    if session.joystickActive { session.stopJoystick() }
+                    withAnimation(.easeInOut(duration: 0.22)) {
+                        controlsMinimized = true
+                    }
+                } label: {
+                    Label("Minimise", systemImage: "chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(RoamPalette.turquoise)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Minimise controls to use the map")
+            }
+            HStack(spacing: 8) {
+                Text("Choose your pace")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 4)
+                Text(speedCaption)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(RoamPalette.turquoise)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(RoamPalette.turquoise.opacity(0.11), in: Capsule())
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 15)
+        .padding(.bottom, 12)
     }
 
     var body: some View {
@@ -547,13 +556,25 @@ struct BottomControlsView: View {
                 compactControls
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
-                ScrollView(.vertical) {
-                    expandedControls
+                VStack(spacing: 0) {
+                    expandedControlsHeader
+                    Rectangle()
+                        .fill(RoamPalette.border)
+                        .frame(height: 1)
+                        .padding(.horizontal, 16)
+                    ScrollView(.vertical) {
+                        expandedControls
+                            .padding(.horizontal, 16)
+                            .padding(.top, 14)
+                            .padding(.bottom, 18)
+                    }
+                    .scrollIndicators(.automatic)
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(maxHeight: 350)
+                    .clipped()
                 }
-                .scrollIndicators(.visible)
-                // The entire control panel was obscuring the map; even expanded,
-                // limit its height and let the user scroll through diagnostics.
-                .frame(maxHeight: 450)
+                .roamSurface(cornerRadius: 25)
+                .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -672,7 +693,7 @@ private struct MovementDiagnosticsView: View {
                     Text(session.lastMovementResult)
                         .font(.footnote)
                 }
-                Section("Continuous movement (v0.20)") {
+                Section("Continuous movement (v0.21)") {
                     LabeledContent("Accepted movement updates", value: String(session.continuousAcceptedTicks))
                     LabeledContent("Failed movement updates", value: String(session.continuousFailedTicks))
                     LabeledContent("Distance accepted by API", value: String(format: "%.1f metres", session.continuousAcceptedMeters))
@@ -682,7 +703,7 @@ private struct MovementDiagnosticsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Section("Extended background cruise (v0.20)") {
+                Section("Extended background cruise (v0.21)") {
                     LabeledContent("Planned trial duration", value: "\(session.backgroundTrialPlannedSeconds) seconds")
                     LabeledContent("Measured trial elapsed", value: String(format: "%.1f seconds", session.backgroundTrialActualSeconds))
                     LabeledContent("Observed background time", value: String(format: "%.1f seconds", session.backgroundTrialObservedBackgroundSeconds))
@@ -710,7 +731,7 @@ private struct MovementDiagnosticsView: View {
                     Text("These are API acknowledgements, not Apple Maps verification. Gaps over 2.5s indicate delayed updates. A 5-minute request does NOT guarantee 5 minutes of execution; iOS may suspend, expire, or terminate the app earlier.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("App lifecycle (v0.20)") {
+                Section("App lifecycle (v0.21)") {
                     LabeledContent("Scene", value: session.lastLifecycleState)
                     LabeledContent("Paused cruise", value: session.pausedCruiseSeconds.map { "\(Int(ceil($0))) seconds remaining" } ?? "None")
                     LabeledContent("Background entries", value: String(session.backgroundTransitions))

@@ -588,12 +588,12 @@ final class SpoofSession: ObservableObject {
             "\(fmt.string(from: $0.timestamp)) | \($0.action) | \($0.succeeded ? "API accepted" : "API failed") | \($0.detail)"
         }.joined(separator: "\n")
         return """
-        Roam v0.20 movement and lifecycle diagnostics
+        Roam v0.21 movement and lifecycle diagnostics
         Status: \(status.label)
         Retained location handle: \(LocationEngine.isSessionActive ? "present (not independently validated)" : "absent")
         Attempts: \(movementAttempts), accepted: \(movementAccepted), failed: \(movementFailed)
         Continuous trial: \(lastContinuousStatus)
-        v0.20 finite background trial: \(backgroundTrialStatus)
+        v0.21 finite background trial: \(backgroundTrialStatus)
         Planned trial duration: \(backgroundTrialPlannedSeconds) s
         Recorded trial wall-clock time: \(String(format: "%.1f", backgroundTrialActualSeconds)) s (does not prove continuous execution)
         Observed background interval(s): \(String(format: "%.1f", backgroundTrialObservedBackgroundSeconds)) s

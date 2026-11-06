@@ -1,11 +1,18 @@
-# Roam v0.20 — Minimisable Map Controls
+# Roam v0.21 — Clean Scrolling Controls + MPH
 
-A map-usability release based on **Roam v0.19**, preserving the proven retained developer session, Wi-Fi-to-cellular re-teleportation, joystick and finite background cruise experiments. It does not change the developer tunnel or location-simulation algorithms.
+A focused interface update based directly on **Roam v0.20**, preserving its working automatic minimisation, compact Re-teleport bar, retained developer session, joystick, and 20/30/60/90/120/300-second experimental background cruise tests.
 
-**New:** after teleport, controls collapse into a small **Expand · Diagnostics · Re-teleport** bar so you can tap a new destination on the map. Expand for the regular controls; minimise the expanded panel or the diagnostic sheet without ending simulation. The expanded panel is scrollable and no longer covers the whole map.
+## What's different
 
-**Version:** `0.20.0 (20)`  
+- **Pinned movement header:** `MOVEMENT MODE`, `Choose your pace`, speed, and `Minimise` stay visible at the top of the expanded control panel.
+- **Contained scrolling:** only the movement buttons and diagnostics shortcuts scroll inside the rounded panel. The card itself no longer scrolls upward and appears cut off at the top.
+- **MPH rather than km/h:** walking, running, cycling, and driving presets display miles per hour (3, 7, 15, and 30 mph respectively). The underlying movement speeds remain **unchanged** in metres per second.
+- **Previous minimising preserved:** teleport automatically collapses the expanded controls; `Expand`, waveform diagnostics, and `Re-teleport` remain on the compact bar. Minimise never stops the GPS session.
+
+**Version:** `0.21.0 (21)`  
 **Codemagic workflow:** `roam-ios-unsigned`  
-**Expected artifact:** `roam-v0.20-unsigned.ipa`
+**Expected artifact:** `roam-v0.21-unsigned.ipa`
 
-See [ROAM_V0.20_BUILD_AND_TEST.md](ROAM_V0.20_BUILD_AND_TEST.md) for installation and testing. Local syntax/configuration validation is **not equivalent to an iOS build**; use Codemagic and iPhone testing to confirm functionality. Keep v0.19 backed up.
+Build instructions and on-device checks: [ROAM_V0.21_BUILD_AND_TEST.md](ROAM_V0.21_BUILD_AND_TEST.md).
+
+Local Swift syntax checks cannot replace the Apple iOS SDK compile and device testing. Keep the working v0.20 source and IPA backed up. The cellular-only initial developer connection remains unresolved.
