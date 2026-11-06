@@ -1,18 +1,11 @@
-# Roam v0.21 — Clean Scrolling Controls + MPH
+# Roam v0.22 — Fresh 4G/5G Connection Diagnostic
 
-A focused interface update based directly on **Roam v0.20**, preserving its working automatic minimisation, compact Re-teleport bar, retained developer session, joystick, and 20/30/60/90/120/300-second experimental background cruise tests.
+Built from the user-confirmed v0.21 source. This update keeps existing location simulation and background-cruise code intact, and adds a read-only paired-handshake comparison plus opt-in Remote Pairing port discovery to Settings.
 
-## What's different
+- `ROAM_V0.22_BUILD_AND_TEST.md`: installation, controlled comparison procedure, and interpretations.
+- `codemagic.yaml`: `roam-ios-unsigned` build, version check for `0.22.0 (22)`, unsigned IPA name `roam-v0.22-unsigned.ipa`.
+- Location engine and VPN/provider interfaces are **not** modified. Selecting a different port only takes effect on a **new** developer session and must be deliberate.
 
-- **Pinned movement header:** `MOVEMENT MODE`, `Choose your pace`, speed, and `Minimise` stay visible at the top of the expanded control panel.
-- **Contained scrolling:** only the movement buttons and diagnostics shortcuts scroll inside the rounded panel. The card itself no longer scrolls upward and appears cut off at the top.
-- **MPH rather than km/h:** walking, running, cycling, and driving presets display miles per hour (3, 7, 15, and 30 mph respectively). The underlying movement speeds remain **unchanged** in metres per second.
-- **Previous minimising preserved:** teleport automatically collapses the expanded controls; `Expand`, waveform diagnostics, and `Re-teleport` remain on the compact bar. Minimise never stops the GPS session.
+**Important:** A successful TCP connection, visible VPN icon or accepted port discovery is not a successful developer tunnel. LocalDevVPN developers have reported that fresh cellular-only routing is restricted on current iOS versions. This is an investigative build, not a promise that Wi-Fi-free startup is solved.
 
-**Version:** `0.21.0 (21)`  
-**Codemagic workflow:** `roam-ios-unsigned`  
-**Expected artifact:** `roam-v0.21-unsigned.ipa`
-
-Build instructions and on-device checks: [ROAM_V0.21_BUILD_AND_TEST.md](ROAM_V0.21_BUILD_AND_TEST.md).
-
-Local Swift syntax checks cannot replace the Apple iOS SDK compile and device testing. Keep the working v0.20 source and IPA backed up. The cellular-only initial developer connection remains unresolved.
+**Do not publish device pairing files**; they are private credentials.

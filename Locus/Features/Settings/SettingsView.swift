@@ -119,13 +119,13 @@ struct SettingsView: View {
                     Text("A VPN interface candidate is not proof that LocalDevVPN is running or that the Apple developer tunnel is reachable. Start a new teleport on Wi-Fi first; movement may continue over mobile data.")
                 }
 
-                Section("CELLULAR RESEARCH — v0.12") {
+                Section("CELLULAR-ONLY START RESEARCH — v0.22") {
                     NavigationLink {
                         CellularResearchView()
                     } label: {
-                        Label("Wi-Fi / 5G tunnel diagnostics", systemImage: "network.badge.shield.half.filled")
+                        Label("5G startup / pairing-port audit", systemImage: "network.badge.shield.half.filled")
                     }
-                    Text("Read-only endpoint and paired-handshake tests. Does not modify GPS, pairing, or VPN settings.")
+                    Text("Discover the actual Remote Pairing port, compare VPN and loopback pairing and record transport failures. Port changes only take effect when you explicitly choose one; no GPS commands are sent by the audit.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

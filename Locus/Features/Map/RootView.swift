@@ -452,7 +452,7 @@ struct BottomControlsView: View {
                             }
                         }
                     }
-                    Text("v0.21: The control header stays visible while you scroll. Tap Minimise to select a new map destination; Expand for joystick and 20/30/60/90/120/300s trials. Background execution can end early.")
+                    Text("v0.22: The control header stays visible while you scroll. Tap Minimise to select a new map destination; Expand for joystick and 20/30/60/90/120/300s trials. Background execution can end early.")
                         .font(.system(size: 10))
                         .foregroundStyle(RoamPalette.muted)
                 }
@@ -693,7 +693,7 @@ private struct MovementDiagnosticsView: View {
                     Text(session.lastMovementResult)
                         .font(.footnote)
                 }
-                Section("Continuous movement (v0.21)") {
+                Section("Continuous movement (v0.22)") {
                     LabeledContent("Accepted movement updates", value: String(session.continuousAcceptedTicks))
                     LabeledContent("Failed movement updates", value: String(session.continuousFailedTicks))
                     LabeledContent("Distance accepted by API", value: String(format: "%.1f metres", session.continuousAcceptedMeters))
@@ -703,7 +703,7 @@ private struct MovementDiagnosticsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Section("Extended background cruise (v0.21)") {
+                Section("Extended background cruise (v0.22)") {
                     LabeledContent("Planned trial duration", value: "\(session.backgroundTrialPlannedSeconds) seconds")
                     LabeledContent("Measured trial elapsed", value: String(format: "%.1f seconds", session.backgroundTrialActualSeconds))
                     LabeledContent("Observed background time", value: String(format: "%.1f seconds", session.backgroundTrialObservedBackgroundSeconds))
@@ -731,7 +731,7 @@ private struct MovementDiagnosticsView: View {
                     Text("These are API acknowledgements, not Apple Maps verification. Gaps over 2.5s indicate delayed updates. A 5-minute request does NOT guarantee 5 minutes of execution; iOS may suspend, expire, or terminate the app earlier.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("App lifecycle (v0.21)") {
+                Section("App lifecycle (v0.22)") {
                     LabeledContent("Scene", value: session.lastLifecycleState)
                     LabeledContent("Paused cruise", value: session.pausedCruiseSeconds.map { "\(Int(ceil($0))) seconds remaining" } ?? "None")
                     LabeledContent("Background entries", value: String(session.backgroundTransitions))

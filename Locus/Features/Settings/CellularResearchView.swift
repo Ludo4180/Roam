@@ -17,6 +17,10 @@ struct CellularResearchView: View {
 
     private let endpoints = ["10.7.0.1", "127.0.0.1", "::1"]
 
+    private var safeToProbe: Bool {
+        !session.isSpoofing && !LocationEngine.isSessionActive
+    }
+
     var body: some View {
         Form {
             Section("NETWORK SNAPSHOT") {
@@ -31,6 +35,66 @@ struct CellularResearchView: View {
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
                 Button("Refresh network snapshot") { research.refreshInterfaces() }
+            }
+
+            Section("v0.22 REMOTE PAIRING PORT — READ ONLY") {
+                Text("49152 is a fallback, not a guaranteed iPhone Remote Pairing port. Discover the advertised _remotepairing._tcp service on Wi-Fi first, then save its real port for a fresh 5G-only test.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                LabeledContent("Saved connection port", value: String(TunnelConfig.targetPort))
+                LabeledContent("Discovery status", value: research.discoveryStatus)
+                    .font(.footnote)
+                Button(research.discoveryRunning ? "Discovering…" : "Discover pairing service port") {
+                    research.discoverRemotePairing()
+                }
+                .disabled(research.discoveryRunning)
+                if !research.discoveredServices.isEmpty {
+                    ForEach(research.discoveredServices) { service in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(service.name).font(.footnote.weight(.semibold))
+                            Text("Port \(service.port) · \(service.host)")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                            Button("Use port \(service.port) for next new session") {
+                                TunnelConfig.setTargetPort(String(service.port))
+                                portText = String(service.port)
+                                research.generalNote = "Selected port \(service.port) for future new sessions. No GPS state changed. Confirm the discovered service belongs to this iPhone."
+                            }
+                            .disabled(!safeToProbe)
+                        }
+                    }
+                }
+                Text("Bonjour might be unavailable with Wi-Fi off, and discovered services could belong to other nearby devices. Do not change ports during a simulation. If discovery finds nothing, keep the currently working port.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("v0.22 5G-ONLY START AUDIT — NO GPS CHANGES") {
+                Text("With Wi-Fi OFF in Settings, mobile data ON and LocalDevVPN connected, compare the paired protocol over the VPN peer and loopback. The same saved port is used for both. This does NOT start or clear a simulation.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                LabeledContent("Network detected", value: research.pathDescription)
+                LabeledContent("Test port", value: String(TunnelConfig.targetPort))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("VPN 10.7.0.1").font(.subheadline.weight(.semibold))
+                    Text(research.cellularVPNResult)
+                        .font(.footnote.monospaced())
+                        .textSelection(.enabled)
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Loopback 127.0.0.1").font(.subheadline.weight(.semibold))
+                    Text(research.cellularLoopbackResult)
+                        .font(.footnote.monospaced())
+                        .textSelection(.enabled)
+                }
+                Button(research.cellularAuditRunning ? "Testing both routes…" : "Run paired VPN vs loopback audit") {
+                    research.runCellularAudit(port: TunnelConfig.targetPort,
+                                              pairingPath: pairing.pairingPath)
+                }
+                .disabled(!pairing.hasPairingFile || !safeToProbe || research.cellularAuditRunning || research.handshakeRunning)
+                Text("If VPN fails but loopback TCP connects, this isolates a route/protocol problem; it does not prove any usable pairing tunnel. If both paired handshakes fail, Roam cannot start a new GPS session over that configuration. Do not repeatedly reset a working session.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("TCP REACHABILITY — NO GPS CHANGES") {
@@ -114,7 +178,7 @@ struct CellularResearchView: View {
                                                 port: port,
                                                 pairingPath: pairing.pairingPath)
                 }
-                .disabled(!pairing.hasPairingFile || research.handshakeRunning || session.isSpoofing)
+                .disabled(!pairing.hasPairingFile || research.handshakeRunning || !safeToProbe || research.cellularAuditRunning)
                 Text(research.handshakeResult)
                     .font(.footnote.monospaced())
                     .textSelection(.enabled)
@@ -124,7 +188,7 @@ struct CellularResearchView: View {
             }
 
             Section("COMPARISON") {
-                Text("1. Confirm LocalDevVPN is connected in iOS Settings > VPN. Record the 10.7.1.1 client interface, if visible.\n2. With Wi-Fi OFF and mobile data OFF, run TCP reachability and default/bound tests, recording the selected endpoint and port.\n3. Turn mobile data ON (Wi-Fi still OFF) without reconnecting the VPN. Repeat the same tests.\n4. If no simulation is active, attempt the paired handshake. A TCP connection alone does not confirm a developer service.")
+                Text("1. First test the existing Wi-Fi baseline, with no active spoofing, and optionally discover the advertised pairing port.\n2. Stop the simulation cleanly, turn Wi-Fi OFF in Settings, leave 4G/5G ON and connect LocalDevVPN.\n3. Run the paired VPN-vs-loopback audit using the saved port.\n4. Copy the diagnostic report, compare against the Wi-Fi result, and only then attempt a fresh teleport using an endpoint whose paired RSD handshake succeeded. Don't modify a working session.")
                     .font(.footnote)
                 if !research.generalNote.isEmpty {
                     Text(research.generalNote).font(.footnote)
@@ -133,7 +197,7 @@ struct CellularResearchView: View {
                     UIPasteboard.general.string = research.report(port: portText)
                     research.generalNote = "Diagnostic report copied. The pairing file and GPS coordinates are not included."
                 }
-                Text("Local on-device testing only. Nothing is uploaded. The report includes connection errors and interface addresses, so review it before sharing publicly.")
+                Text("Local on-device testing only. Nothing is uploaded. Never share your pairing file. The report includes connection errors and interface addresses, so review it before sharing publicly.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -148,6 +212,14 @@ struct CellularResearchView: View {
 @MainActor
 private final class CellularResearchModel: ObservableObject {
     @Published var pathDescription = "Checking…"
+    @Published var discoveredServices: [RoamDiscoveredService] = []
+    @Published var discoveryStatus = "Not run"
+    @Published var discoveryRunning = false
+    @Published var cellularVPNResult = "Not tested"
+    @Published var cellularLoopbackResult = "Not tested"
+    @Published var cellularAuditRunning = false
+    private var discovery: RoamRemotePairingBrowser?
+    private var lastCellularAuditTime = "Not tested"
     @Published var interfaceDescription = "Checking…"
     @Published var tcpResults: [String: String] = [:]
     @Published var handshakeResult = "Not tested"
@@ -200,6 +272,9 @@ private final class CellularResearchModel: ObservableObject {
     }
 
     func stopMonitoring() {
+        discovery?.stop()
+        discovery = nil
+        discoveryRunning = false
         monitor?.cancel()
         monitor = nil
         for connection in connections.values { connection.cancel() }
@@ -258,6 +333,48 @@ private final class CellularResearchModel: ObservableObject {
     func labelForUtun(_ name: String) -> String {
         let addresses = utunAddresses[name] ?? []
         return addresses.isEmpty ? name : "\(name) — \(addresses.joined(separator: ", "))"
+    }
+
+    func discoverRemotePairing() {
+        discovery?.stop()
+        discoveredServices = []
+        discoveryStatus = "Browsing local Bonjour (up to 6 seconds)…"
+        discoveryRunning = true
+        let browser = RoamRemotePairingBrowser()
+        discovery = browser
+        browser.start(timeout: 6) { [weak self, weak browser] services, note in
+            guard let self, self.discovery === browser else { return }
+            self.discoveredServices = services
+            self.discoveryStatus = note
+            self.discoveryRunning = false
+            self.discovery = nil
+        }
+    }
+
+    func runCellularAudit(port: UInt16, pairingPath: String) {
+        cellularAuditRunning = true
+        cellularVPNResult = "Testing…"
+        cellularLoopbackResult = "Queued…"
+        lastCellularAuditTime = ISO8601DateFormatter().string(from: Date())
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            for host in ["10.7.0.1", "127.0.0.1"] {
+                let tcp = RoamBoundTCPProbe.check(host: host, port: port, interface: nil)
+                let start = ProcessInfo.processInfo.systemUptime
+                let outcome = RoamPairingHandshakeProbe.check(host: host, port: port,
+                                                              pairingPath: pairingPath)
+                let seconds = ProcessInfo.processInfo.systemUptime - start
+                let result = "TCP: \(tcp); paired: \(outcome.stage) — \(outcome.detail) (\(String(format: "%.1f", seconds))s)"
+                DispatchQueue.main.async {
+                    if host == "10.7.0.1" {
+                        self?.cellularVPNResult = result
+                        self?.cellularLoopbackResult = "Testing…"
+                    } else {
+                        self?.cellularLoopbackResult = result
+                        self?.cellularAuditRunning = false
+                    }
+                }
+            }
+        }
     }
 
     func runInterfaceBoundComparison(host: String, port: UInt16) {
@@ -348,7 +465,7 @@ private final class CellularResearchModel: ObservableObject {
 
     func report(port: String) -> String {
         var lines = [
-            "Roam v0.12 cellular research — \(ISO8601DateFormatter().string(from: Date()))",
+            "Roam v0.22 cellular-only start audit — \(ISO8601DateFormatter().string(from: Date()))",
             "Device network path: \(pathDescription)",
             "Interfaces:\n\(interfaceDescription)",
             "Network path available interfaces: \(networkInterfacesDescription)",
@@ -364,7 +481,13 @@ private final class CellularResearchModel: ObservableObject {
         lines.append("Paired attempt: \(lastHandshakeTime) / \(handshakeEndpoint)")
         lines.append("Paired stage: \(handshakeStage)")
         lines.append("Paired result: \(handshakeResult)")
-        lines.append("Interpretation: TCP and a matching utun IP do not prove developer service access or VPN ownership.")
+        lines.append("Configured pairing port for new sessions: \(TunnelConfig.targetPort)")
+        lines.append("Bonjour discovery: \(discoveryStatus)")
+        for service in discoveredServices { lines.append("Bonjour service: \(service.name) / \(service.host) / \(service.port)") }
+        lines.append("Cellular A/B attempt: \(lastCellularAuditTime)")
+        lines.append("VPN paired result: \(cellularVPNResult)")
+        lines.append("Loopback paired result: \(cellularLoopbackResult)")
+        lines.append("Interpretation: TCP and a matching utun IP do not prove developer service access or VPN ownership. A Bonjour service may belong to another device. No GPS commands are sent during these probes.")
         return lines.joined(separator: "\n")
     }
 }
@@ -493,5 +616,72 @@ private enum RoamBoundTCPProbe {
 
     private static func explain(_ code: Int32) -> String {
         "\(String(cString: strerror(code))) (errno \(code))"
+    }
+}
+
+
+// v0.22: Discover the actual _remotepairing._tcp port rather than assuming
+// the service always listens on 49152. Detection is non-destructive.
+// No selection is automatically applied; nearby devices may advertise too.
+private struct RoamDiscoveredService: Identifiable, Hashable {
+    let name: String
+    let host: String
+    let port: Int
+    var id: String { "\(name)|\(host)|\(port)" }
+}
+
+private final class RoamRemotePairingBrowser: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
+    private let browser = NetServiceBrowser()
+    private var services: [NetService] = []
+    private var found: [RoamDiscoveredService] = []
+    private var finished = false
+    private var onComplete: (([RoamDiscoveredService], String) -> Void)?
+
+    func start(timeout: TimeInterval, onComplete: @escaping ([RoamDiscoveredService], String) -> Void) {
+        self.onComplete = onComplete
+        browser.delegate = self
+        browser.schedule(in: .main, forMode: .common)
+        browser.searchForServices(ofType: "_remotepairing._tcp.", inDomain: "local.")
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            guard let self, !self.finished else { return }
+            self.finish(note: self.found.isEmpty
+                        ? "No service advertised (not proof the service is absent)"
+                        : "Found \(self.found.count) advertised service(s); verify the device name")
+        }
+    }
+
+    func stop() {
+        guard !finished else { return }
+        finish(note: "Stopped")
+    }
+
+    private func finish(note: String) {
+        guard !finished else { return }
+        finished = true
+        browser.stop()
+        for service in services { service.stop() }
+        let completion = onComplete
+        onComplete = nil
+        completion?(found, note)
+    }
+
+    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        services.append(service)
+        service.delegate = self
+        service.resolve(withTimeout: 4)
+    }
+
+    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
+        finish(note: "Bonjour browse failed: \(errorDict)")
+    }
+
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        guard (1...65535).contains(sender.port) else { return }
+        let result = RoamDiscoveredService(name: sender.name,
+                                           host: sender.hostName ?? "unknown host",
+                                           port: sender.port)
+        if !found.contains(result) { found.append(result) }
+        // Allow the discovery window to complete; another nearby device may
+        // be advertising a different port. Do not guess which is this iPhone.
     }
 }
