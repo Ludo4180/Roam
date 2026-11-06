@@ -1,6 +1,6 @@
 workflows:
   roam-ios-unsigned:
-    name: Roam v0.23 - cellular route A/B diagnostics (Release)
+    name: Roam v0.24 - Wi-Fi-free startup guide (Release)
     max_build_duration: 60
     instance_type: mac_mini_m2
     environment:
@@ -11,6 +11,7 @@ workflows:
           set -eu
           test -f Locus.xcodeproj/project.pbxproj
           test -f Locus/Features/Settings/CellularResearchView.swift
+          test -f Locus/Features/Settings/OfflineStartupGuideView.swift
           test -f Vendor/idevice/libidevice_ffi.a
           xcodebuild -version
           xcodebuild -list -project Locus.xcodeproj
@@ -32,9 +33,9 @@ workflows:
           test -d "$APP"
           VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
           BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")
-          echo "Built Roam $VERSION ($BUILD); expecting Roam 0.23.0 (23)"
-          test "$VERSION" = "0.23.0"
-          test "$BUILD" = "23"
+          echo "Built Roam $VERSION ($BUILD); expecting Roam 0.24.0 (24)"
+          test "$VERSION" = "0.24.0"
+          test "$BUILD" = "24"
           test -f "$APP/Roam"
       - name: Package unsigned IPA for signing in iLoader
         script: |
@@ -42,9 +43,9 @@ workflows:
           APP="$CM_BUILD_DIR/DerivedData/Build/Products/Release-iphoneos/Roam.app"
           mkdir -p "$CM_BUILD_DIR/Payload"
           cp -R "$APP" "$CM_BUILD_DIR/Payload/Roam.app"
-          (cd "$CM_BUILD_DIR" && zip -qr roam-v0.23-unsigned.ipa Payload)
-          test -f "$CM_BUILD_DIR/roam-v0.23-unsigned.ipa"
+          (cd "$CM_BUILD_DIR" && zip -qr roam-v0.24-unsigned.ipa Payload)
+          test -f "$CM_BUILD_DIR/roam-v0.24-unsigned.ipa"
     artifacts:
       - roam-build.log
-      - roam-v0.23-unsigned.ipa
+      - roam-v0.24-unsigned.ipa
       - DerivedData/Build/Products/Release-iphoneos/*.app

@@ -9,6 +9,7 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSettings = false
     @State private var showPlaces = false
+    @State private var showOfflineStartupGuide = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -17,7 +18,8 @@ struct RootView: View {
 
             BottomControlsView(
                 showSettings: $showSettings,
-                showPlaces: $showPlaces
+                showPlaces: $showPlaces,
+                showOfflineStartupGuide: $showOfflineStartupGuide
             )
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
@@ -25,6 +27,7 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPlaces) { PlacesView() }
+        .sheet(isPresented: $showOfflineStartupGuide) { OfflineStartupGuideView() }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background: session.applicationEnteredBackground()
@@ -38,6 +41,10 @@ struct RootView: View {
             set: { if !$0 { session.lastError = nil } }
         )) {
             Button("OK", role: .cancel) { session.lastError = nil }
+            Button("Wi-Fi-free startup guide") {
+                session.lastError = nil
+                showOfflineStartupGuide = true
+            }
         } message: {
             Text(session.lastError ?? "")
         }
@@ -169,6 +176,7 @@ struct BottomControlsView: View {
     @EnvironmentObject private var pairing: PairingStore
     @Binding var showSettings: Bool
     @Binding var showPlaces: Bool
+    @Binding var showOfflineStartupGuide: Bool
     @State private var confirmEndSimulation = false
     @State private var showMovementDiagnostics = false
     @State private var controlsMinimized = false
@@ -207,6 +215,16 @@ struct BottomControlsView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open GPS movement diagnostics")
+
+            Button { showOfflineStartupGuide = true } label: {
+                Image(systemName: "bolt.horizontal.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(RoamPalette.turquoise)
+                    .frame(width: 38, height: 42)
+                    .background(Color.white.opacity(0.06), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open Wi-Fi-free startup guide")
 
             Spacer(minLength: 0)
 
@@ -452,10 +470,23 @@ struct BottomControlsView: View {
                             }
                         }
                     }
-                    Text("v0.23: The control header stays visible while you scroll. Tap Minimise to select a new map destination; Expand for joystick and 20/30/60/90/120/300s trials. Background execution can end early.")
+                    Text("v0.24: The control header stays visible while you scroll. Tap Minimise to select a new map destination; Expand for joystick and 20/30/60/90/120/300s trials. Background execution can end early.")
                         .font(.system(size: 10))
                         .foregroundStyle(RoamPalette.muted)
                 }
+
+                Button {
+                    showOfflineStartupGuide = true
+                } label: {
+                    HStack {
+                        Label("Wi-Fi-free startup guide", systemImage: "bolt.horizontal.circle.fill")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RoamPalette.turquoise)
+                }
+                .buttonStyle(.plain)
 
                 Button {
                     showMovementDiagnostics = true
@@ -605,7 +636,7 @@ struct BottomControlsView: View {
             }
             Button("Keep Simulation", role: .cancel) { }
         } message: {
-            Text("This clears the simulated GPS position. On cellular, you may need Wi-Fi again to start a new session.")
+            Text("This clears the simulated GPS position. For a new cellular start, keep LocalDevVPN connected and use the Wi-Fi-free offline startup guide.")
         }
     }
 

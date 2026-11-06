@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var probeConnection: NWConnection?
     @State private var showImporter = false
     @State private var showPairOnDevice = false
+    @State private var showOfflineStartupGuide = false
     @State private var tunnelIP = TunnelConfig.targetIP
     @State private var developerPort = String(TunnelConfig.targetPort)
     @State private var localDevVPNInstalled = LocalDevVPN.isInstalled
@@ -116,10 +117,21 @@ struct SettingsView: View {
                 } header: {
                     Text("Tunnel")
                 } footer: {
-                    Text("A VPN interface candidate is not proof that LocalDevVPN is running or that the Apple developer tunnel is reachable. Start a new teleport on Wi-Fi first; movement may continue over mobile data.")
+                    Text("A VPN candidate is not proof LocalDevVPN is connected. For the confirmed Wi-Fi-free method, see the offline startup guide. Turn mobile data off temporarily for a fresh start while the VPN remains connected.")
                 }
 
-                Section("CELLULAR-ONLY START / ROUTE RESEARCH — v0.23") {
+                Section("WI-FI-FREE STARTUP — v0.24") {
+                    Button {
+                        showOfflineStartupGuide = true
+                    } label: {
+                        Label("Open guided offline startup", systemImage: "bolt.horizontal.circle.fill")
+                    }
+                    Text("With LocalDevVPN already connected, temporarily disable both Wi-Fi and mobile data, teleport, then restore cellular. This guide never changes the network itself.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("CELLULAR START / ROUTE RESEARCH — v0.23") {
                     NavigationLink {
                         CellularResearchView()
                     } label: {
@@ -171,6 +183,11 @@ struct SettingsView: View {
         }
             .sheet(isPresented: $showPairOnDevice) {
                 PairOnDeviceView()
+                    .environmentObject(pairing)
+            }
+            .sheet(isPresented: $showOfflineStartupGuide) {
+                OfflineStartupGuideView()
+                    .environmentObject(session)
                     .environmentObject(pairing)
             }
             .onAppear {
