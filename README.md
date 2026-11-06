@@ -1,8 +1,8 @@
-# Roam v0.24 — Wi-Fi-free startup workflow
+# Roam v0.25 — one-tap Shortcuts-assisted Wi-Fi-free startup
 
-Built from the user-tested v0.23 source. GPS simulation, original LocalDevVPN compatibility, joystick, GPS diagnostics, 20/30/60/90/120/300-second experimental background movement and mph interface remain unchanged.
+Built from the user-tested v0.24 source. GPS simulation, original LocalDevVPN compatibility, joystick, GPS diagnostics, 20/30/60/90/120/300-second experimental background movement and mph interface remain unchanged.
 
-**New:** an opt-in Wi-Fi-free startup guide accessible from the map controls and Settings. The guide shows the iOS network path, pairing-file presence, a *candidate* VPN interface (not authenticated), the retained developer session handle, engine result, and a manual Start / Re-teleport button for the selected map pin. It provides recovery guidance and optional instructions for creating two native iOS Shortcuts.
+**Retained from v0.24:** an opt-in Wi-Fi-free startup guide accessible from the map controls and Settings. The guide shows the iOS network path, pairing-file presence, a *candidate* VPN interface (not authenticated), the retained developer session handle, engine result, and a manual Start / Re-teleport button for the selected map pin. It provides recovery guidance and optional instructions for creating two native iOS Shortcuts.
 
 ## User-confirmed procedure
 
@@ -13,13 +13,15 @@ Built from the user-tested v0.23 source. GPS simulation, original LocalDevVPN co
 
 This workflow was reproduced on the user's iPhone, but it is **not** proof of a fresh VPN establishment while cellular remains ON. A VPN-interface candidate or retained GPS handle is not independent proof Apple Maps changed: verify externally.
 
-The app **does not** toggle Wi-Fi/mobile data itself, change VPN settings or reset a retained GPS session. If Shortcuts is available, users may manually create `Set Cellular Data: Off` and `Set Cellular Data: On` actions in separate Shortcuts. No Shortcut files are supplied or auto-run.
+**New in v0.25:** optional native Shortcuts-assisted startup. Create two user-owned Shortcuts named **Roam Data Off** (Set Cellular Data to Off, then Open App → Roam) and **Roam Data On** (Set Cellular Data to On, then Open App → Roam). The in-app button launches the first Shortcuts URL only after the user explicitly arms a one-shot teleport and confirms VPN connected. On returning to foreground, Roam sends one teleport to the preselected pin **only if the network path reports offline and the 90-second window is still open**. An obvious manual button runs the second Shortcut to restore data. Shortcuts must be installed and set up by the user; Roam does not know whether the Shortcut actually toggled data, and the returned result must be confirmed in Apple Maps.
 
-The project builds with `roam-ios-unsigned` in Codemagic; `roam-v0.24-unsigned.ipa` is produced after the iOS build. See `ROAM_V0.24_BUILD_AND_TEST.md`.
+The app **does not** toggle Wi-Fi/mobile data itself, change VPN settings, reset a retained GPS session, or create Shortcuts automatically. An offline NWPath result is not conclusive proof of either radio's setting. If any step fails, restore mobile data via iPhone Settings and use v0.24's manual guide.
 
-**Important:** Keep v0.23's working source and IPA backed up. Preserve private RPPairing credentials and do not publish them.
+The project builds with `roam-ios-unsigned` in Codemagic; `roam-v0.25-unsigned.ipa` is produced after the iOS build. See `ROAM_V0.25_BUILD_AND_TEST.md`.
+
+**Important:** Keep the working v0.24 source and IPA backed up. Preserve private RPPairing credentials and do not publish them.
 
 ## Previous diagnostics retained
 
 - v0.23 cellular route audit captures ordinary and bound TCP tests, path observations and independent Wi-Fi/cellular baselines under Cellular Research.
-- Earlier versions' 20s through 300s background cruise experiments remain in the original session engine, untouched by v0.24.
+- Earlier versions' 20s through 300s background cruise experiments remain in the original session engine, untouched by v0.25.
