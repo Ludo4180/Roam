@@ -21,6 +21,29 @@ struct CellularResearchView: View {
         !session.isSpoofing && !LocationEngine.isSessionActive
     }
 
+    private func routeFinding(_ label: String, result: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.subheadline.weight(.semibold))
+            Text(result).font(.footnote.monospaced()).foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func routeSnapshot(_ snapshot: RoamRouteAuditSnapshot, title: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.subheadline.weight(.semibold))
+            Text("\(snapshot.date) · \(snapshot.transport) · port \(snapshot.port)")
+            Text("VPN candidate \(snapshot.utun) · uplink \(snapshot.uplink)")
+            Text("Unbound VPN peer: \(snapshot.defaultTCP)")
+            Text("Bound VPN candidate: \(snapshot.utunTCP)")
+            Text("Bound uplink: \(snapshot.uplinkTCP)")
+            Text("Loopback: \(snapshot.loopbackTCP)")
+            if let path = snapshot.nwConnectionPath { Text("NWConnection: \(path)") }
+        }
+        .font(.footnote.monospaced())
+        .textSelection(.enabled)
+    }
+
     var body: some View {
         Form {
             Section("NETWORK SNAPSHOT") {
@@ -93,6 +116,50 @@ struct CellularResearchView: View {
                 }
                 .disabled(!pairing.hasPairingFile || !safeToProbe || research.cellularAuditRunning || research.handshakeRunning)
                 Text("If VPN fails but loopback TCP connects, this isolates a route/protocol problem; it does not prove any usable pairing tunnel. If both paired handshakes fail, Roam cannot start a new GPS session over that configuration. Do not repeatedly reset a working session.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("v0.23 CELLULAR ROUTE COMPARISON — NO GPS CHANGES") {
+                Text("Compare the same developer endpoint on Wi-Fi and cellular without changing the VPN, pairing file or simulated location. Run once on connected Wi-Fi, then once with Wi-Fi OFF in Settings. Results are saved locally for side-by-side review.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                LabeledContent("Current transport", value: research.pathDescription)
+                LabeledContent("VPN interface candidate", value: research.selectedUtun.isEmpty ? "None visible" : research.labelForUtun(research.selectedUtun))
+                    .font(.footnote)
+                LabeledContent("Uplink probe interface", value: research.routeUplinkDescription)
+                    .font(.footnote)
+                LabeledContent("Target", value: "10.7.0.1:\(TunnelConfig.targetPort)")
+                Button(research.routeAuditRunning ? "Testing local paths…" : "Capture this network's route audit") {
+                    research.runRouteAudit(port: TunnelConfig.targetPort)
+                }
+                .disabled(!safeToProbe || research.routeAuditRunning || research.cellularAuditRunning || research.handshakeRunning || research.interfaceTestRunning)
+                Text(research.routeAuditStatus)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                LabeledContent("System connection path", value: research.routeNWPathResult)
+                    .font(.footnote)
+                routeFinding("Unbound TCP → VPN peer", result: research.routeDefaultResult)
+                routeFinding("Bound TCP → VPN candidate", result: research.routeUtunResult)
+                routeFinding("Bound TCP → uplink", result: research.routeUplinkResult)
+                routeFinding("Loopback TCP (control)", result: research.routeLoopbackResult)
+
+                if let wifi = research.wifiRouteSnapshot {
+                    routeSnapshot(wifi, title: "Saved Wi-Fi baseline")
+                }
+                if let cellular = research.cellularRouteSnapshot {
+                    routeSnapshot(cellular, title: "Saved cellular baseline")
+                }
+                if let wifi = research.wifiRouteSnapshot, let cellular = research.cellularRouteSnapshot {
+                    Text("Comparison: Wi-Fi VPN peer: \(wifi.defaultTCP). Cellular VPN peer: \(cellular.defaultTCP). These are socket outcomes, NOT a system routing-table dump or proof that packets reached LocalDevVPN.")
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
+                Button("Clear saved Wi-Fi and cellular snapshots", role: .destructive) {
+                    research.clearRouteSnapshots()
+                }
+                .disabled(research.wifiRouteSnapshot == nil && research.cellularRouteSnapshot == nil)
+                Text("Roam cannot inspect another app's Network Extension packet counters, its effective route table, or the owner of a utun interface. A bound socket test only probes interface selection; it does not change the developer engine route. Running this test never starts GPS spoofing.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -209,6 +276,20 @@ struct CellularResearchView: View {
     }
 }
 
+/// Only read-only route-test summaries; no pairing credentials or GPS coordinates.
+private struct RoamRouteAuditSnapshot: Codable {
+    let date: String
+    let transport: String
+    let port: UInt16
+    let utun: String
+    let uplink: String
+    let defaultTCP: String
+    let utunTCP: String
+    let uplinkTCP: String
+    let loopbackTCP: String
+    let nwConnectionPath: String?
+}
+
 @MainActor
 private final class CellularResearchModel: ObservableObject {
     @Published var pathDescription = "Checking…"
@@ -218,6 +299,27 @@ private final class CellularResearchModel: ObservableObject {
     @Published var cellularVPNResult = "Not tested"
     @Published var cellularLoopbackResult = "Not tested"
     @Published var cellularAuditRunning = false
+    @Published var routeAuditRunning = false
+    @Published var routeAuditStatus = "Not run. Stop simulation before testing."
+    @Published var routeDefaultResult = "Not tested"
+    @Published var routeUtunResult = "Not tested"
+    @Published var routeUplinkResult = "Not tested"
+    @Published var routeLoopbackResult = "Not tested"
+    @Published var routeNWPathResult = "Not tested"
+    @Published var wifiRouteSnapshot: RoamRouteAuditSnapshot?
+    @Published var cellularRouteSnapshot: RoamRouteAuditSnapshot?
+    private var routeNWConnection: NWConnection?
+    private var routeUplink = ""
+    var routeUplinkDescription: String {
+        switch pathDescription {
+        case let s where s.contains("Cellular"): return "pdp_ip0 (candidate; not verified)"
+        case let s where s.contains("Wi-Fi"): return "en0 (candidate; not verified)"
+        default: return "Transport not established"
+        }
+    }
+    private static let wifiSnapshotKey = "roam.route.v023.wifi"
+    private static let cellularSnapshotKey = "roam.route.v023.cellular"
+
     private var discovery: RoamRemotePairingBrowser?
     private var lastCellularAuditTime = "Not tested"
     @Published var interfaceDescription = "Checking…"
@@ -246,6 +348,12 @@ private final class CellularResearchModel: ObservableObject {
     private var lastTCPTime = "Not tested"
 
     func startMonitoring() {
+        if let data = UserDefaults.standard.data(forKey: Self.wifiSnapshotKey) {
+            wifiRouteSnapshot = try? JSONDecoder().decode(RoamRouteAuditSnapshot.self, from: data)
+        }
+        if let data = UserDefaults.standard.data(forKey: Self.cellularSnapshotKey) {
+            cellularRouteSnapshot = try? JSONDecoder().decode(RoamRouteAuditSnapshot.self, from: data)
+        }
         refreshInterfaces()
         let pathMonitor = NWPathMonitor()
         monitor = pathMonitor
@@ -272,6 +380,8 @@ private final class CellularResearchModel: ObservableObject {
     }
 
     func stopMonitoring() {
+        routeNWConnection?.cancel()
+        routeNWConnection = nil
         discovery?.stop()
         discovery = nil
         discoveryRunning = false
@@ -333,6 +443,139 @@ private final class CellularResearchModel: ObservableObject {
     func labelForUtun(_ name: String) -> String {
         let addresses = utunAddresses[name] ?? []
         return addresses.isEmpty ? name : "\(name) — \(addresses.joined(separator: ", "))"
+    }
+
+    func clearRouteSnapshots() {
+        wifiRouteSnapshot = nil
+        cellularRouteSnapshot = nil
+        UserDefaults.standard.removeObject(forKey: Self.wifiSnapshotKey)
+        UserDefaults.standard.removeObject(forKey: Self.cellularSnapshotKey)
+        routeAuditStatus = "Stored route comparisons cleared. GPS and pairing unchanged."
+    }
+
+    func runRouteAudit(port: UInt16) {
+        guard !routeAuditRunning else { return }
+        let transport: String
+        let uplink: String
+        if pathDescription.contains("Wi-Fi") {
+            transport = "Wi-Fi"
+            uplink = "en0"
+        } else if pathDescription.contains("Cellular") {
+            transport = "Cellular"
+            uplink = "pdp_ip0"
+        } else {
+            routeAuditStatus = "Network not ready. Connect Wi-Fi or cellular and refresh."
+            return
+        }
+        // Prefer the observed tunnel-client IP rather than assuming the
+        // user's last manually selected utun still belongs to LocalDevVPN.
+        let candidate = utunInterfaces.first { utunAddresses[$0]?.contains("10.7.1.1") == true }
+            ?? selectedUtun
+        routeAuditRunning = true
+        routeAuditStatus = "Checking VPN endpoint via unbound, utun-bound and uplink-bound sockets…"
+        routeDefaultResult = "Testing…"
+        routeUtunResult = "Queued…"
+        routeUplinkResult = "Queued…"
+        routeLoopbackResult = "Queued…"
+        routeNWPathResult = "Inspecting NWConnection path (does not reveal VPN packet counters)…"
+        routeUplink = uplink
+        recordNWConnectionPath(port: port)
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let defaultTCP = RoamBoundTCPProbe.checkDetailed(host: "10.7.0.1", port: port, interface: nil)
+            DispatchQueue.main.async { self?.routeDefaultResult = defaultTCP }
+            let candidateResult = candidate.isEmpty
+                ? "No utun candidate visible"
+                : RoamBoundTCPProbe.checkDetailed(host: "10.7.0.1", port: port, interface: candidate)
+            DispatchQueue.main.async { self?.routeUtunResult = candidateResult }
+            let uplinkResult = RoamBoundTCPProbe.checkDetailed(host: "10.7.0.1", port: port, interface: uplink)
+            DispatchQueue.main.async { self?.routeUplinkResult = uplinkResult }
+            let loopbackResult = RoamBoundTCPProbe.checkDetailed(host: "127.0.0.1", port: port, interface: nil)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let result = RoamRouteAuditSnapshot(
+                    date: ISO8601DateFormatter().string(from: Date()),
+                    transport: transport, port: port,
+                    utun: candidate.isEmpty ? "none" : candidate,
+                    uplink: uplink,
+                    defaultTCP: defaultTCP, utunTCP: candidateResult,
+                    uplinkTCP: uplinkResult, loopbackTCP: loopbackResult,
+                    nwConnectionPath: self.routeNWPathResult)
+                self.routeLoopbackResult = loopbackResult
+                self.routeAuditRunning = false
+                self.routeAuditStatus = "\(transport) snapshot saved. No GPS or VPN configuration changed."
+                if let data = try? JSONEncoder().encode(result) {
+                    if transport == "Wi-Fi" {
+                        self.wifiRouteSnapshot = result
+                        UserDefaults.standard.set(data, forKey: Self.wifiSnapshotKey)
+                    } else {
+                        self.cellularRouteSnapshot = result
+                        UserDefaults.standard.set(data, forKey: Self.cellularSnapshotKey)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Current connection path is observable from Network.framework; it is
+    /// not a kernel routing table and cannot identify another VPN app's packets.
+    private func recordNWConnectionPath(port: UInt16) {
+        routeNWConnection?.cancel()
+        guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
+            routeNWPathResult = "Invalid port"
+            return
+        }
+        let conn = NWConnection(host: "10.7.0.1", port: endpointPort, using: .tcp)
+        routeNWConnection = conn
+        conn.pathUpdateHandler = { [weak self] path in
+            let label = Self.describe(path: path)
+            DispatchQueue.main.async {
+                guard let self, self.routeNWConnection === conn else { return }
+                self.routeNWPathResult = "NWPath: \(label) (available interfaces are not proof of selected VPN route)"
+            }
+        }
+        conn.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready, .failed(_):
+                let outcome: String
+                switch state {
+                case .ready: outcome = "TCP connected"
+                case .failed(let error): outcome = "TCP failed: \(error.localizedDescription)"
+                default: outcome = "Unknown"
+                }
+                let path = conn.currentPath.map { Self.describe(path: $0) } ?? "path unavailable"
+                DispatchQueue.main.async {
+                    guard let self, self.routeNWConnection === conn else { return }
+                    self.routeNWPathResult = "\(outcome); NWPath: \(path) (not the kernel route table)"
+                    self.routeNWConnection = nil
+                    conn.cancel()
+                }
+            default: break
+            }
+        }
+        conn.start(queue: tcpQueue)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            guard let self, self.routeNWConnection === conn else { return }
+            self.routeNWPathResult += "; observation timed out after 6s"
+            self.routeNWConnection = nil
+            conn.cancel()
+        }
+    }
+
+    private nonisolated static func describe(path: NWPath) -> String {
+        let status: String
+        switch path.status {
+        case .satisfied: status = "satisfied"
+        case .unsatisfied: status = "unsatisfied"
+        case .requiresConnection: status = "requires connection"
+        @unknown default: status = "unknown"
+        }
+        let types = ["Wi-Fi", "Cellular", "Wired", "Other"]
+        let active = [path.usesInterfaceType(.wifi), path.usesInterfaceType(.cellular),
+                      path.usesInterfaceType(.wiredEthernet), path.usesInterfaceType(.other)]
+        let names = zip(types, active).compactMap { $0.1 ? $0.0 : nil }.joined(separator: ", ")
+        let available = path.availableInterfaces.map { $0.name }.joined(separator: ", ")
+        return "\(status), uses [\(names)], available [\(available)]"
     }
 
     func discoverRemotePairing() {
@@ -465,7 +708,7 @@ private final class CellularResearchModel: ObservableObject {
 
     func report(port: String) -> String {
         var lines = [
-            "Roam v0.22 cellular-only start audit — \(ISO8601DateFormatter().string(from: Date()))",
+            "Roam v0.23 cellular route and startup audit — \(ISO8601DateFormatter().string(from: Date()))",
             "Device network path: \(pathDescription)",
             "Interfaces:\n\(interfaceDescription)",
             "Network path available interfaces: \(networkInterfacesDescription)",
@@ -487,6 +730,19 @@ private final class CellularResearchModel: ObservableObject {
         lines.append("Cellular A/B attempt: \(lastCellularAuditTime)")
         lines.append("VPN paired result: \(cellularVPNResult)")
         lines.append("Loopback paired result: \(cellularLoopbackResult)")
+        lines.append("v0.23 route A/B: \(routeAuditStatus)")
+        lines.append("Observed NWConnection path: \(routeNWPathResult)")
+        lines.append("Unbound VPN peer: \(routeDefaultResult)")
+        lines.append("Utun-bound VPN peer: \(routeUtunResult)")
+        lines.append("Uplink-bound VPN peer: \(routeUplinkResult)")
+        lines.append("Loopback control: \(routeLoopbackResult)")
+        if let wifi = wifiRouteSnapshot {
+            lines.append("Saved Wi-Fi snapshot: \(wifi.date); target port \(wifi.port), utun=\(wifi.utun), uplink=\(wifi.uplink), unbound=\(wifi.defaultTCP), utun bound=\(wifi.utunTCP), uplink bound=\(wifi.uplinkTCP), loopback=\(wifi.loopbackTCP), NWPath=\(wifi.nwConnectionPath ?? "not recorded")")
+        }
+        if let cellular = cellularRouteSnapshot {
+            lines.append("Saved cellular snapshot: \(cellular.date); target port \(cellular.port), utun=\(cellular.utun), uplink=\(cellular.uplink), unbound=\(cellular.defaultTCP), utun bound=\(cellular.utunTCP), uplink bound=\(cellular.uplinkTCP), loopback=\(cellular.loopbackTCP), NWPath=\(cellular.nwConnectionPath ?? "not recorded")")
+        }
+        lines.append("Limitations: Roam cannot read another app's Network Extension packet counters, VPN configuration or actual kernel routing table; NWPath and bound sockets supply limited observations only.")
         lines.append("Interpretation: TCP and a matching utun IP do not prove developer service access or VPN ownership. A Bonjour service may belong to another device. No GPS commands are sent during these probes.")
         return lines.joined(separator: "\n")
     }
@@ -612,6 +868,73 @@ private enum RoamBoundTCPProbe {
         }
         guard optionResult == 0 else { return "SO_ERROR failed: \(explain(errno))" }
         return socketError == 0 ? "TCP connected" : "connect failed: \(explain(socketError))"
+    }
+
+    /// Same target as the previous audit but adds the selected local TCP
+    /// source endpoint on success. A refused socket can't establish a route.
+    static func checkDetailed(host: String, port: UInt16, interface: String?) -> String {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return "socket failed: \(explain(errno))" }
+        defer { _ = Darwin.close(fd) }
+        if let interface {
+            let index = interface.withCString { if_nametoindex($0) }
+            guard index > 0 else { return "Interface \(interface) not found on this snapshot" }
+            var boundIfIndex = Int32(index)
+            let rc = withUnsafePointer(to: &boundIfIndex) {
+                setsockopt(fd, IPPROTO_IP, 25, $0, socklen_t(MemoryLayout<Int32>.size))
+            }
+            guard rc == 0 else { return "IP_BOUND_IF \(interface) failed: \(explain(errno))" }
+        }
+        let flags = fcntl(fd, F_GETFL, 0)
+        guard flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            return "Nonblocking setup failed: \(explain(errno))"
+        }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(port).bigEndian
+        guard host.withCString({ inet_pton(AF_INET, $0, &address.sin_addr) }) == 1 else {
+            return "Invalid IPv4 endpoint"
+        }
+        let connected = withUnsafePointer(to: &address) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if connected != 0 {
+            let initialError = errno
+            guard initialError == EINPROGRESS else {
+                return "connect failed: \(explain(initialError))"
+            }
+            var event = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+            let waitResult = Darwin.poll(&event, 1, 5_000)
+            if waitResult == 0 { return "Timed out after 5 seconds" }
+            if waitResult < 0 { return "poll failed: \(explain(errno))" }
+            var code: Int32 = 0
+            var length = socklen_t(MemoryLayout<Int32>.size)
+            let rc = withUnsafeMutablePointer(to: &code) {
+                getsockopt(fd, SOL_SOCKET, SO_ERROR, $0, &length)
+            }
+            guard rc == 0 else { return "SO_ERROR failed: \(explain(errno))" }
+            if code != 0 { return "connect failed: \(explain(code))" }
+        }
+        var local = sockaddr_in()
+        var localSize = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let localResult = withUnsafeMutablePointer(to: &local) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &localSize)
+            }
+        }
+        guard localResult == 0 else { return "TCP connected; local endpoint unavailable: \(explain(errno))" }
+        var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        let resolve = withUnsafePointer(to: &local) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getnameinfo($0, localSize, &hostBuffer, socklen_t(hostBuffer.count),
+                            nil, 0, NI_NUMERICHOST)
+            }
+        }
+        guard resolve == 0 else { return "TCP connected; local address unavailable" }
+        return "TCP connected, local socket \(String(cString: hostBuffer)):\(UInt16(bigEndian: local.sin_port))"
     }
 
     private static func explain(_ code: Int32) -> String {
