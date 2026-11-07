@@ -120,13 +120,13 @@ struct SettingsView: View {
                     Text("A VPN candidate is not proof LocalDevVPN is connected. For the confirmed Wi-Fi-free method, see the offline startup guide. Turn mobile data off temporarily for a fresh start while the VPN remains connected.")
                 }
 
-                Section("WI-FI-FREE STARTUP — v0.27") {
+                Section("WI-FI-FREE STARTUP — v0.28") {
                     Button {
                         showOfflineStartupGuide = true
                     } label: {
                         Label("Open guided offline startup", systemImage: "bolt.horizontal.circle.fill")
                     }
-                    Text("Choose proven VPN-connected One-Tap startup or try the experimental Cold Start Shortcut that connects LocalDevVPN first. Roam never changes VPN settings or the cellular radio directly.")
+                    Text("Use the working Cold Start Shortcut from a disconnected LocalDevVPN profile, or the VPN-connected One-Tap fallback. v0.28 adds Apple Maps confirmation, recovery and a shareable safe summary. Roam never changes the VPN or cellular settings directly.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

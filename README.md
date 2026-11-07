@@ -1,3 +1,15 @@
+# Roam v0.28 — stable Cold Start and startup verification
+
+Built directly from **Roam v0.27 Codemagic-fixed full source** (the user-tested Cold Start baseline). New: a compact live startup state, user-confirmed Apple Maps result counters, failure recovery actions, safe diagnostic summary copying, and a three-run reliability plan. The proven v0.27 Shortcuts flow and all GPS, pairing, VPN, movement, and background-cruise engine files are unchanged.
+
+**Read [`ROAM_V0.28_BUILD_AND_TEST.md`](ROAM_V0.28_BUILD_AND_TEST.md) before installing.** The v0.28 Codemagic output should be `roam-v0.28-unsigned.ipa`. Use the unchanged iLoader signing procedure and update all three Shortcuts to **Open App → new Roam v0.28**.
+
+The installed **original LocalDevVPN is still required**; Cold Start automates its *connection*, not its replacement. A successful GPS API return is not proof of independent Apple Maps movement; v0.28 adds a separate user-controlled verification count. Do not remove the working v0.27 backup.
+
+---
+
+## Earlier version notes (retained for history)
+
 # Roam v0.26 — optional assisted cellular restoration
 
 Built directly from the user-tested **Roam v0.25** source. This version preserves the established Wi-Fi-free startup procedure, with the **original LocalDevVPN already connected**. All underlying GPS, pairing, VPN-integration, joystick, route and background-cruise engine files are unchanged.
