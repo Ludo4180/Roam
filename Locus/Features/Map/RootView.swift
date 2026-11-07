@@ -516,7 +516,7 @@ struct BottomControlsView: View {
                             }
                         }
                     }
-                    Text("The control header stays visible while you scroll. Tap Minimise to select a new map destination; Expand for joystick and 20/30/60/90/120/300s trials. Background execution can end early.")
+                    Text("The control header stays visible while you scroll. Tap Minimise to select a new map destination; Expand for joystick and 20s-to-30min trials. iOS may stop longer trials early.")
                         .font(.system(size: 10))
                         .foregroundStyle(RoamPalette.muted)
                 }
@@ -743,6 +743,9 @@ private struct RoamCommandCenterView: View {
     @State private var vpnCandidateVisible = LocalDevVPN.tunnelCandidate != nil
     @State private var confirmEndSimulation = false
     @State private var confirmLongCruise = false
+    @State private var confirmExtendedCruise = false
+    @State private var extendedCruiseDuration = 900
+    @State private var manualAppleMapsCheck = "Not recorded"
     @State private var copiedSummary = false
 
     private var active: Bool { session.isSpoofing }
@@ -778,6 +781,9 @@ private struct RoamCommandCenterView: View {
                     headerCard
                     actionsCard
                     movementCard
+                    if session.cruiseActive || session.backgroundTrialPlannedSeconds > 0 {
+                        cruiseHealthCard
+                    }
                     recoveryCard
                     connectionCard
                 }
@@ -819,6 +825,17 @@ private struct RoamCommandCenterView: View {
         } message: {
             Text("This finite experiment may finish early if iOS suspends the app. Apple Maps observation is the independent movement check.")
         }
+        .confirmationDialog("Start extended cruise experiment?", isPresented: $confirmExtendedCruise,
+                            titleVisibility: .visible) {
+            Button("Start \(extendedCruiseDuration / 60)-minute trial") {
+                guard canStartCruise, [900, 1800].contains(extendedCruiseDuration) else { return }
+                manualAppleMapsCheck = "Not recorded"
+                session.startBackgroundCruise(duration: extendedCruiseDuration, pairing: pairing)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This requests a \(extendedCruiseDuration / 60)-minute scheduling window, NOT guaranteed background runtime. iOS can suspend or expire the finite task early; Roam will stop issuing updates on expiration. Confirm movement independently in Apple Maps.")
+        }
     }
 
     private var headerCard: some View {
@@ -826,7 +843,7 @@ private struct RoamCommandCenterView: View {
             HStack(spacing: 12) {
                 RoamBrandMark(size: 43)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("ROAM · v0.29")
+                    Text("ROAM · v0.30")
                         .font(.system(size: 11, weight: .bold))
                         .tracking(1.6)
                         .foregroundStyle(RoamPalette.turquoise)
@@ -930,16 +947,43 @@ private struct RoamCommandCenterView: View {
                 .buttonStyle(.bordered)
                 .disabled(!canStartCruise)
             }
+            HStack(spacing: 10) {
+                ForEach([900, 1800], id: \.self) { duration in
+                    Button {
+                        extendedCruiseDuration = duration
+                        confirmExtendedCruise = true
+                    } label: {
+                        VStack(spacing: 3) {
+                            Label("\(duration / 60)-minute cruise", systemImage: "timer")
+                                .font(.system(size: 12, weight: .bold))
+                            Text("EXPERIMENTAL")
+                                .font(.system(size: 9, weight: .semibold))
+                                .tracking(0.8)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 52)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!canStartCruise)
+                }
+            }
             if session.cruiseActive {
-                HStack(spacing: 7) {
-                    Image(systemName: "arrow.up.forward.circle.fill")
-                        .foregroundStyle(RoamPalette.turquoise)
-                    Text("Cruise running · \(session.cruiseSecondsRemaining)s remaining")
-                        .font(.system(size: 12, weight: .semibold))
-                    Spacer(minLength: 0)
-                    Button("Stop movement") { session.stopCruise() }
-                        .font(.system(size: 11, weight: .semibold))
-                        .buttonStyle(.bordered)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "arrow.up.forward.circle.fill")
+                            .foregroundStyle(RoamPalette.turquoise)
+                        Text("Cruise running · \(displayDuration(session.cruiseSecondsRemaining)) remaining")
+                            .font(.system(size: 12, weight: .semibold))
+                        Spacer(minLength: 0)
+                        Button("Stop movement") { session.stopCruise() }
+                            .font(.system(size: 11, weight: .semibold))
+                            .buttonStyle(.bordered)
+                    }
+                    ProgressView(value: session.cruiseProgressFraction)
+                        .tint(RoamPalette.turquoise)
+                        .accessibilityLabel("Requested cruise time elapsed")
+                    Text("\(displayDuration(session.cruiseElapsedSeconds)) elapsed of \(displayDuration(session.cruisePlannedSeconds)) requested · timer progress, not GPS verification")
+                        .font(.system(size: 10))
+                        .foregroundStyle(RoamPalette.muted)
                 }
             }
             HStack(spacing: 10) {
@@ -967,6 +1011,81 @@ private struct RoamCommandCenterView: View {
         }
         .padding(15)
         .roamSurface(cornerRadius: 20)
+    }
+
+    // UI-only status. GPS API results must be independently checked in Apple Maps.
+    private var cruiseHealthCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("CRUISE HEALTH", symbol: "waveform.path.ecg")
+            HStack(spacing: 8) {
+                Image(systemName: healthHasWarnings ? "exclamationmark.triangle.fill" : "checkmark.circle")
+                    .foregroundStyle(healthHasWarnings ? LocusTheme.statusWarn : RoamPalette.turquoise)
+                Text(healthDescription)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .accessibilityElement(children: .combine)
+            statusRow("Requested window", detail: displayDuration(session.backgroundTrialPlannedSeconds))
+            statusRow("Background API accepted / attempted", detail: "\(session.backgroundTrialAccepted) / \(session.backgroundTrialAttempts)")
+            statusRow("Background API failures", detail: String(session.backgroundTrialFailed))
+            statusRow("Longest observed timer gap", detail: String(format: "%.2f s", session.backgroundTrialLongestTickGap))
+            statusRow("Gaps over 2.5 seconds", detail: String(session.backgroundTrialLargeTickGaps))
+            statusRow("Finite task still held", detail: session.backgroundTrialTaskHeld ? "Yes" : "No")
+            statusRow("iOS task expirations", detail: String(session.backgroundTrialExpirations))
+            statusRow("Budget safety stops", detail: String(session.backgroundTrialBudgetStops))
+            statusRow("Observed time in background", detail: String(format: "%.1f s", session.backgroundTrialObservedBackgroundSeconds))
+            if let allowance = session.backgroundTrialMinimumBudgetSeconds {
+                statusRow("Lowest observed iOS allowance", detail: String(format: "%.1f s", allowance))
+            }
+            if let last = session.lastBackgroundTrialCommandAt {
+                statusRow("Last background command", detail: last.formatted(date: .omitted, time: .standard))
+            }
+            if !session.cruiseActive {
+                Text("End reason: \(session.backgroundTrialEndReason)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(RoamPalette.muted)
+            }
+            Divider().overlay(RoamPalette.border)
+            Text("Independent Apple Maps observation (manual)")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(RoamPalette.muted)
+            HStack(spacing: 8) {
+                Button("Observed moving") { manualAppleMapsCheck = "User observed moving" }
+                    .buttonStyle(.bordered)
+                Button("Not moving") { manualAppleMapsCheck = "User observed not moving" }
+                    .buttonStyle(.bordered)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            Text("Recorded: \(manualAppleMapsCheck) · in this Command Centre view only")
+                .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
+            Text("API acceptance, elapsed-time progress and task allocation do not prove uninterrupted background execution. Check Apple Maps separately. No automatic task renewal is attempted.")
+                .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
+        }
+        .padding(15)
+        .roamSurface(cornerRadius: 20)
+    }
+
+    private var healthHasWarnings: Bool {
+        session.backgroundTrialFailed > 0 ||
+        session.backgroundTrialLargeTickGaps > 0 ||
+        session.backgroundTrialExpirations > 0 ||
+        session.backgroundTrialBudgetStops > 0
+    }
+
+    private var healthDescription: String {
+        if session.backgroundTrialExpirations > 0 { return "iOS ended the finite task" }
+        if session.backgroundTrialBudgetStops > 0 { return "Stopped near iOS time limit" }
+        if session.backgroundTrialFailed > 0 { return "GPS API failures were recorded" }
+        if session.backgroundTrialLargeTickGaps > 0 { return "Delayed movement ticks detected" }
+        if session.cruiseActive { return "No logged API failures or large gaps yet" }
+        return "Trial completed or stopped; review end reason"
+    }
+
+    private func displayDuration(_ seconds: Int) -> String {
+        let safe = max(0, seconds)
+        return String(format: "%d:%02d", safe / 60, safe % 60)
     }
 
     private var recoveryCard: some View {
@@ -1032,7 +1151,7 @@ private struct RoamCommandCenterView: View {
 
     private var safeSummary: String {
         [
-            "Roam v0.29 — Command Centre summary",
+            "Roam v0.30 — Command Centre and long-cruise summary",
             "UTC: \(ISO8601DateFormatter().string(from: Date()))",
             "GPS session active: \(session.isSpoofing)",
             "Engine state: \(session.status.label)",
@@ -1043,6 +1162,12 @@ private struct RoamCommandCenterView: View {
             "Movement API failed: \(session.movementFailed)",
             "Background trial API accepted: \(session.backgroundTrialAccepted)",
             "Background trial API failed: \(session.backgroundTrialFailed)",
+            "Requested trial seconds: \(session.backgroundTrialPlannedSeconds)",
+            "Trial end reason: \(session.backgroundTrialEndReason)",
+            "Longest trial tick gap: \(String(format: "%.2f", session.backgroundTrialLongestTickGap)) seconds",
+            "Gaps greater than 2.5 seconds: \(session.backgroundTrialLargeTickGaps)",
+            "Finite task expirations: \(session.backgroundTrialExpirations)",
+            "Manual Apple Maps check: \(manualAppleMapsCheck)",
             "Location confirmation is a separate manual Apple Maps check.",
             "No coordinates, addresses, endpoints, pairing secrets or device identifiers included."
         ].joined(separator: "\n")
@@ -1117,8 +1242,10 @@ private struct MovementDiagnosticsView: View {
                     LabeledContent("Failed movement updates", value: String(session.continuousFailedTicks))
                     LabeledContent("Distance accepted by API", value: String(format: "%.1f metres", session.continuousAcceptedMeters))
                     LabeledContent("Cruise running", value: session.cruiseActive ? "Yes" : "No")
+                    LabeledContent("Cruise requested", value: "\(session.cruisePlannedSeconds) seconds")
+                    LabeledContent("Cruise elapsed (clock)", value: "\(session.cruiseElapsedSeconds) seconds")
                     Text(session.lastContinuousStatus).font(.footnote)
-                    Text("The standard cruise pauses on background entry. Only a separately started experimental 20/30/60/90/120/300s trial attempts location updates while Roam is backgrounded, and only while the finite iOS task is allowed to run.")
+                    Text("The standard cruise pauses on background entry. Only a separately started experimental finite trial (20 seconds to 30 minutes requested) attempts location updates while Roam is backgrounded, and only while the finite iOS task is allowed to run.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1147,7 +1274,7 @@ private struct MovementDiagnosticsView: View {
                             Text(summary).font(.caption2).textSelection(.enabled)
                         }
                     }
-                    Text("These are API acknowledgements, not Apple Maps verification. Gaps over 2.5s indicate delayed updates. A 5-minute request does NOT guarantee 5 minutes of execution; iOS may suspend, expire, or terminate the app earlier.")
+                    Text("These are API acknowledgements, not Apple Maps verification. Gaps over 2.5s indicate delayed updates. A 15- or 30-minute request does NOT guarantee that much background execution; iOS may suspend, expire, or terminate the app earlier.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("App lifecycle (v0.23)") {

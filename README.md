@@ -1,25 +1,24 @@
-# Roam v0.29 — Command Centre & resilient Cold Start
+# Roam v0.30 — Extended Cruise & Session Health
 
-Roam v0.29 builds on the **user-tested v0.28**, including the verified Wi-Fi-free Cold Start, Apple Maps mirroring, re-teleportation with cellular OFF and restored ON, and a five-minute observed northbound movement trial.
+Roam v0.30 builds on the **iPhone-tested v0.29** Command Centre, assisted Cold Start, Apple Maps mirroring, repeated 5-minute northbound cruises, and re-teleportation.
 
-## New in v0.29
+## What changed in v0.30
 
-- **Roam Command Centre** on the map: one consolidated panel for Cold Start, Teleport/Re-teleport, 20-second or five-minute background cruise, Pause, End GPS Session and Recovery.
-- A compact-controls Command Centre button and a clearly labelled shortcut in the expanded movement controls.
-- Safer connection language: an active GPS session remains shown as active even when the VPN interface candidate is temporarily absent. VPN interface detection alone does **not** prove authentication.
-- A privacy-conscious, locally generated Command Centre summary with no map coordinates or pairing material.
-- Separate research notes on **removing the installed LocalDevVPN dependency**. No unsupported VPN extension or unverified connection bypass is bundled.
-- Updated version metadata and Codemagic verification to **0.29.0 (29)** to avoid the v0.27 build-number mismatch.
+- **15-minute and 30-minute northbound cruise experiments** in Command Centre. Each requires explicit confirmation. These are *requested windows*, not promised background runtime: iOS can suspend the application or end its single finite background task before the requested duration.
+- **Live requested-time progress** in Command Centre, labelled as a timer estimate—not verified GPS movement.
+- **Cruise Health card**: background API attempts/acceptances/failures, longest scheduling gap, gaps above 2.5 seconds, task expiration and background budget observations. All are internal diagnostics, not proof of Apple Maps movement.
+- **Manual external observation**: note whether you saw Apple Maps moving, then copy a privacy-conscious Command Centre summary without coordinates, endpoints or pairing credentials. The observation is saved *only while the Command Centre view is open*.
+- **More accurate recovery instructions**: a cruise requires an active *retained GPS simulation*; Wi-Fi is no longer prescribed if the proven Shortcut-assisted Cold Start has already established the connection.
+- **Codemagic / Xcode version** set to `0.30.0 (30)`, output `roam-v0.30-unsigned.ipa`.
 
-**Preserved exactly:** Every source file in `Locus/Engine/`, the LocalDevVPN adapter, the original pairing and location simulation interfaces, and existing experimental background movement. The original Cold Start and Shortcuts state machine has no behavioural changes. No new entitlements.
+## What was deliberately left alone
 
-This ZIP contains **source code, not a signed or working IPA**. Codemagic compilation and iPhone testing are still required. Full instructions are in [ROAM_V0.29_BUILD_AND_TEST.md](ROAM_V0.29_BUILD_AND_TEST.md). Review [connection-independence research](ROAM_V0.29_CONNECTION_INDEPENDENCE_RESEARCH.md) before attempting changes to the VPN stack.
+The pairing and GPS communication implementation in `Locus/Engine/LocationEngine.swift`, `Locus/Engine/DeviceTunnel.swift`, `Locus/Engine/PairingStore.swift`, `Locus/Engine/PairOnDeviceService.swift`, and `Locus/Support/LocalDevVPN.swift` is unchanged from v0.29. Background-cruise update logic and the existing single background task are retained; only the allowed requested durations and UI progress metadata were extended in `SpoofSession.swift`. No automatic task renewal, entitlement trick, or external VPN replacement was added.
 
-## Confirmed limitations
+## Getting started
 
-- The installed **LocalDevVPN is still required** for the current successful on-device developer pairing path. The `Roam Cold Start` iOS Shortcut connects that profile automatically; it does **not** remove the dependency.
-- The iPhone must already have the working pairing configuration and the user's three Shortcuts correctly targeting the latest app installation.
-- A local GPS API acknowledgement is not proof of system-wide movement. Continue verifying with Apple Maps.
-- Background cruise can be stopped or suspended by iOS before its planned duration.
+See [ROAM_V0.30_BUILD_AND_TEST.md](ROAM_V0.30_BUILD_AND_TEST.md). Back up v0.29 first. This is **source code**, not a signed IPA. It has not been compiled on Xcode or tested on the user's phone.
 
-Preserve a working copy of **v0.28** before upgrading.
+## Critical limitation
+
+An iOS foreground timer can run for a requested 15/30 minutes, but background execution has system limits. An API acceptance is not independent evidence of continuous system-wide location; verify live movement through Apple Maps. The application currently relies on the separate LocalDevVPN app and iPhone Shortcuts for Cold Start.

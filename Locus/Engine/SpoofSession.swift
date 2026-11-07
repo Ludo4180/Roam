@@ -105,6 +105,19 @@ final class SpoofSession: ObservableObject {
     // trial so Apple Maps can be inspected AFTER the movement has finished.
     @Published private(set) var cruiseActive = false
     @Published private(set) var cruiseSecondsRemaining = 0
+    // v0.30: UI timer progress only; NOT independent proof of background motion.
+    @Published private(set) var cruisePlannedSeconds = 0
+
+    var cruiseProgressFraction: Double {
+        guard cruiseActive, cruisePlannedSeconds > 0 else { return 0 }
+        let elapsed = cruisePlannedSeconds - cruiseSecondsRemaining
+        return min(1, max(0, Double(elapsed) / Double(cruisePlannedSeconds)))
+    }
+
+    var cruiseElapsedSeconds: Int {
+        guard cruiseActive else { return 0 }
+        return max(0, cruisePlannedSeconds - cruiseSecondsRemaining)
+    }
     @Published private(set) var continuousAcceptedMeters = 0.0
     @Published private(set) var continuousAcceptedTicks = 0
     @Published private(set) var continuousFailedTicks = 0
@@ -415,11 +428,12 @@ final class SpoofSession: ObservableObject {
         beginNorthCruise(duration: 20, pairing: pairing, resetCounters: true)
     }
 
-    /// v0.19: identical v0.17 path, now also selectable for 90, 120, or 300 seconds.
+    /// v0.30: extend original finite experiments to requested 15/30-minute
+    /// windows, never guaranteeing the iOS background task will run this long.
     /// This is ONLY a finite, user-started experiment with an already retained
     /// developer session. It does not request unlimited background operation.
     func startBackgroundCruise(duration: Int, pairing: PairingStore) {
-        guard [20, 30, 60, 90, 120, 300].contains(duration) else { return }
+        guard [20, 30, 60, 90, 120, 300, 900, 1800].contains(duration) else { return }
         guard canStartRetainedCruise(pairing: pairing) else { return }
         pauseMovement()
         pausedCruiseSeconds = nil
@@ -439,7 +453,7 @@ final class SpoofSession: ObservableObject {
         backgroundTrialBackgroundEntryUptime = nil
         backgroundTrialLastTickUptime = nil
         backgroundTrialStartedUptime = ProcessInfo.processInfo.systemUptime
-        backgroundTrialStatus = "Requesting finite iOS background task for \(duration)s"
+        backgroundTrialStatus = "Requesting finite iOS background task for \(duration)s (not guaranteed)"
         guard beginShortCruiseTask(duration: duration) else {
             backgroundTrialEndReason = "No iOS background task granted"
             backgroundTrialStatus = "iOS did not grant the background task; no experimental cruise started"
@@ -449,7 +463,7 @@ final class SpoofSession: ObservableObject {
         }
         backgroundTrialEnabled = true
         beginNorthCruise(duration: TimeInterval(duration), pairing: pairing, resetCounters: true)
-        backgroundTrialStatus = "\(duration)s experimental cruise started; switch to Apple Maps"
+        backgroundTrialStatus = "\(duration)s requested; iOS may suspend or expire background execution early — verify in Apple Maps"
         logLifecycle("Experimental \(duration)s background cruise started in foreground")
     }
 
@@ -461,8 +475,8 @@ final class SpoofSession: ObservableObject {
     private func canStartRetainedCruise(pairing: PairingStore) -> Bool {
         guard !isBusy, pairing.hasPairingFile,
               LocationEngine.isSessionActive, simulated != nil else {
-            lastMovementResult = "Cruise blocked: establish an initial Wi-Fi teleport first"
-            lastError = "A retained simulation is required. Start a successful teleport on Wi-Fi before the 4G movement trial."
+            lastMovementResult = "Cruise blocked: establish a successful retained GPS teleport first"
+            lastError = "A retained GPS simulation is required. Use Cold Start or a normal successful teleport first."
             return false
         }
         return true
@@ -473,6 +487,7 @@ final class SpoofSession: ObservableObject {
         lastMovementTickUptime = nil // never count background time as movement
         cruiseActive = true
         cruiseSecondsRemaining = Int(ceil(duration))
+        cruisePlannedSeconds = Int(ceil(duration))
         lastContinuousStatus = "Moving north for \(Int(ceil(duration))) seconds at \(travelMode.title) preset"
         cruiseDeadlineUptime = ProcessInfo.processInfo.systemUptime + duration
         cruiseTimer = Timer.scheduledTimer(withTimeInterval: movementTickInterval, repeats: true) { [weak self] _ in
@@ -1013,7 +1028,8 @@ final class SpoofSession: ObservableObject {
         SavedPlace.save(recents, key: recentsKey)
     }
 
-    /// User-started, finite UIKit assertion for one 20/30/60/90/120/300s trial.
+    /// User-started finite assertion for 20s-to-30min REQUESTED trials.
+    /// The assertion may expire at any point and never auto-renews.
     /// UIKit may expire it before the desired duration. The expiration handler
     /// must stop the trial and release the assertion, NOT schedule a new one.
     private func beginShortCruiseTask(duration: Int) -> Bool {
