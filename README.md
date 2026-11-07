@@ -1,27 +1,31 @@
-# Roam v0.25 — one-tap Shortcuts-assisted Wi-Fi-free startup
+# Roam v0.26 — optional assisted cellular restoration
 
-Built from the user-tested v0.24 source. GPS simulation, original LocalDevVPN compatibility, joystick, GPS diagnostics, 20/30/60/90/120/300-second experimental background movement and mph interface remain unchanged.
+Built directly from the user-tested **Roam v0.25** source. This version preserves the established Wi-Fi-free startup procedure, with the **original LocalDevVPN already connected**. All underlying GPS, pairing, VPN-integration, joystick, route and background-cruise engine files are unchanged.
 
-**Retained from v0.24:** an opt-in Wi-Fi-free startup guide accessible from the map controls and Settings. The guide shows the iOS network path, pairing-file presence, a *candidate* VPN interface (not authenticated), the retained developer session handle, engine result, and a manual Start / Re-teleport button for the selected map pin. It provides recovery guidance and optional instructions for creating two native iOS Shortcuts.
+## What changed
 
-## User-confirmed procedure
+- A new, **OFF by default**, non-persistent switch in the Wi-Fi-free Startup guide: **Automatically run Data On after accepted teleport**. When explicitly enabled for that attempt, Roam runs your *existing* `Roam Data Off` Shortcut, waits until the network observer reports offline after app return, and sends exactly one teleport request as in v0.25. **Only if the local GPS API accepts the teleport**, Roam waits two seconds in the foreground and then opens the user-created `Roam Data On` Shortcut. The hand-off is cancelled if the app leaves the foreground, the view closes, a failure is reported or the user cancels it. Normal manual restore remains available at all times.
+- Prominent manual **Restore mobile data now** action appears after a locally accepted one-shot teleport when still offline.
+- Separate status when the user returns after running the Data On Shortcut. A cellular path as reported by `NWPathMonitor` is an **indicator**, not proof the cellular setting was actually switched, and API acceptance is **not** proof of Apple Maps movement.
+- Small privacy-conscious, local-only counters: one-tap attempts, API accepted/failed, Data On Shortcut launches and observed cellular-path returns. Reset control included. No coordinates, IP addresses, RPPairing data or other secrets are retained by this new instrumentation.
+- Recovery guidance for when the original VPN is disconnected or a Shortcut fails. Restoring mobile data manually remains possible even after any failed auto-teleport.
 
-1. With cellular data available, connect the original LocalDevVPN. Check Settings > VPN.
-2. In Settings, turn **Wi-Fi OFF** and temporarily turn **Mobile Data OFF**, leaving the VPN connected.
-3. Return to Roam, choose a destination and **Teleport** to establish a new simulated GPS session while offline.
-4. Turn **Mobile Data ON** again (keep Wi-Fi OFF). Check Apple Maps; re-teleport should work over cellular. The user also confirmed re-teleporting while data stayed OFF.
+No modification to the LocalDevVPN application, Apple VPN entitlements, location engine, or RPPairing files. Roam does not independently change cellular/Wi-Fi settings, nor can it confirm the Shortcuts ran successfully: the existing Shortcuts explicitly configured by the user perform those actions.
 
-This workflow was reproduced on the user's iPhone, but it is **not** proof of a fresh VPN establishment while cellular remains ON. A VPN-interface candidate or retained GPS handle is not independent proof Apple Maps changed: verify externally.
+## Demonstrated baseline — v0.25 on the user's iPhone
 
-**New in v0.25:** optional native Shortcuts-assisted startup. Create two user-owned Shortcuts named **Roam Data Off** (Set Cellular Data to Off, then Open App → Roam) and **Roam Data On** (Set Cellular Data to On, then Open App → Roam). The in-app button launches the first Shortcuts URL only after the user explicitly arms a one-shot teleport and confirms VPN connected. On returning to foreground, Roam sends one teleport to the preselected pin **only if the network path reports offline and the 90-second window is still open**. An obvious manual button runs the second Shortcut to restore data. Shortcuts must be installed and set up by the user; Roam does not know whether the Shortcut actually toggled data, and the returned result must be confirmed in Apple Maps.
+With Wi-Fi OFF, the original LocalDevVPN already connected and cellular data initially ON, Roam successfully invoked `Roam Data Off`, returned offline, automatically teleported once and showed the new simulated location in Apple Maps. The user also confirmed using `Roam Data On` and re-teleporting with cellular restored. **v0.26's automatic second Shortcut launch is new and has not been tested on a device.**
 
-The app **does not** toggle Wi-Fi/mobile data itself, change VPN settings, reset a retained GPS session, or create Shortcuts automatically. An offline NWPath result is not conclusive proof of either radio's setting. If any step fails, restore mobile data via iPhone Settings and use v0.24's manual guide.
+For the safest first v0.26 test leave the new toggle OFF and verify the old manual-restore sequence, then separately opt in to the new automatically launched restore Shortcut. Do not remove the v0.25 backup until the new build passes on-device tests.
 
-The project builds with `roam-ios-unsigned` in Codemagic; `roam-v0.25-unsigned.ipa` is produced after the iOS build. See `ROAM_V0.25_BUILD_AND_TEST.md`.
+Build via the existing Codemagic workflow `roam-ios-unsigned`. Expected file: `roam-v0.26-unsigned.ipa` (you still sign with your established iLoader method). See `ROAM_V0.26_BUILD_AND_TEST.md`.
 
-**Important:** Keep the working v0.24 source and IPA backed up. Preserve private RPPairing credentials and do not publish them.
+## Important constraints
 
-## Previous diagnostics retained
+- Correctly named user-created Shortcuts `Roam Data Off` and `Roam Data On`, both ending in **Open App → new Roam installation**.
+- Wi-Fi OFF; original LocalDevVPN **already connected** prior to taking cellular data offline.
+- A selected map pin and pairing file installed. Keep the proven v0.25 IPA/source in backup.
+- Full cold-start pairing with LocalDevVPN disconnected over cellular is **not** demonstrated.
+- The v0.26 optional hand-off is experimental; normal Shortcuts may show their own system UI. No guarantee of uninterrupted or fully background-automatic execution.
 
-- v0.23 cellular route audit captures ordinary and bound TCP tests, path observations and independent Wi-Fi/cellular baselines under Cellular Research.
-- Earlier versions' 20s through 300s background cruise experiments remain in the original session engine, untouched by v0.25.
+Earlier cellular routing diagnostics and finite background movement experiments remain available in their unchanged source locations.

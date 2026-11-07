@@ -2,7 +2,7 @@ import SwiftUI
 import Network
 import CoreLocation
 
-/// v0.25: opt-in Shortcuts-assisted Wi-Fi-free startup.
+/// v0.26: opt-in Shortcuts-assisted Wi-Fi-free startup and explicit auto-restore hand-off.
 /// Shortcuts are created and run by the user. Roam can arm one finite,
 /// foreground-only teleport after the user returns while the network is offline.
 /// Never silently changes radios, resets the VPN, or clears a retained GPS handle.
@@ -26,6 +26,25 @@ struct OfflineStartupGuideView: View {
     @State private var autoStartPin: CLLocationCoordinate2D?
     @State private var oneTapFeedback = "Not started — create the two Shortcuts first"
     @State private var autoStartAcceptedLocally = false
+
+    // v0.26: OFF by default every time the guide is opened. After explicit opt-in,
+    // a successful one-shot API request can hand off to the USER-CREATED Data On Shortcut.
+    // This is NOT a direct cellular setting change, and API acceptance does not prove
+    // that Apple Maps has moved. The existing manual restore action always remains.
+    @State private var autoRestoreForThisStart = false
+    @State private var pendingRestoreHandoff: UUID?
+    @State private var restoreRequested = false
+    @State private var restoreLeftApp = false
+    @State private var restoreReturnedToApp = false
+    @State private var restoreFeedback = "No restore requested yet"
+    @State private var cellularReturnRecorded = false
+
+    // No location coordinates, pairing secrets or IPs are logged or persisted.
+    @AppStorage("roam.v026.oneTapStarts") private var oneTapStarts = 0
+    @AppStorage("roam.v026.oneTapAccepted") private var oneTapAccepted = 0
+    @AppStorage("roam.v026.oneTapFailed") private var oneTapFailed = 0
+    @AppStorage("roam.v026.restoreRequests") private var restoreRequests = 0
+    @AppStorage("roam.v026.cellularPathReturns") private var cellularPathReturns = 0
     private let autoStartTimeout: TimeInterval = 90
 
     private var canArmAutoStart: Bool {
@@ -43,7 +62,7 @@ struct OfflineStartupGuideView: View {
                     Text("Start Roam without Wi-Fi")
                         .font(.system(size: 23, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
-                    Text("This workflow has worked on your iPhone with LocalDevVPN already connected. Switch mobile data off briefly to start a new simulation, then switch it back on. Nothing is changed automatically.")
+                    Text("Your confirmed Wi-Fi-free workflow uses a pre-connected LocalDevVPN. v0.26 can optionally run your existing ‘Roam Data On’ Shortcut after an accepted teleport, but only when you explicitly enable it for that attempt.")
                         .font(.subheadline)
                         .foregroundStyle(RoamPalette.muted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -73,6 +92,8 @@ struct OfflineStartupGuideView: View {
                     .roamSurface(cornerRadius: 20)
 
                     oneTapCard
+
+                    reliabilityCard
 
                     VStack(alignment: .leading, spacing: 12) {
                         step(1, title: "Connect LocalDevVPN", note: "With mobile data ON, connect the original LocalDevVPN. Check Settings → VPN says Connected. Do not replace the working VPN.")
@@ -205,7 +226,20 @@ struct OfflineStartupGuideView: View {
             if autoStartArmed && phase != .active {
                 leftAppAfterArming = true
             }
+            if restoreRequested && phase != .active {
+                restoreLeftApp = true
+            }
+            if phase != .active && pendingRestoreHandoff != nil {
+                // A user leaving to Apple Maps or another app cancels the delayed
+                // auto-restore. Their ordinary manual restore remains available.
+                pendingRestoreHandoff = nil
+                restoreFeedback = "Automatic restore paused because Roam left the foreground. Restore data manually when ready."
+            }
             if phase == .active {
+                if restoreRequested && restoreLeftApp {
+                    restoreReturnedToApp = true
+                    observeRestoreReturn()
+                }
                 if autoStartArmed && leftAppAfterArming {
                     returnedAfterArming = true
                 }
@@ -215,6 +249,14 @@ struct OfflineStartupGuideView: View {
         }
         .onChange(of: network.offlineObserved) { _, _ in
             checkArmedAutoStart()
+            observeRestoreReturn()
+        }
+        .onChange(of: network.cellularPathObserved) { _, _ in
+            observeRestoreReturn()
+        }
+        .onDisappear {
+            // A delayed Shortcuts hand-off must not run after the guide is dismissed.
+            pendingRestoreHandoff = nil
         }
         .task {
             while !Task.isCancelled {
@@ -234,11 +276,11 @@ struct OfflineStartupGuideView: View {
                     .tracking(0.8)
                     .foregroundStyle(RoamPalette.turquoise)
                 Spacer()
-                Text("NEW · v0.25")
+                Text("NEW · v0.26")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(RoamPalette.muted)
             }
-            Text("With Wi-Fi OFF and LocalDevVPN already connected, one tap runs your ‘Roam Data Off’ Shortcut. When it brings you back to Roam and the network reports offline, Roam sends ONE teleport to your selected pin.")
+            Text("With Wi-Fi OFF and LocalDevVPN already connected, one tap runs your ‘Roam Data Off’ Shortcut. On return offline, Roam sends ONE teleport. Optional auto-restore launches ‘Roam Data On’ only if the GPS API accepts the command.")
                 .font(.system(size: 12))
                 .foregroundStyle(RoamPalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -257,6 +299,18 @@ struct OfflineStartupGuideView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(RoamPalette.muted)
             }
+            Toggle(isOn: $autoRestoreForThisStart) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Automatically run Data On after accepted teleport")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("Optional · experimental. If enabled, Roam briefly waits then opens your existing ‘Roam Data On’ Shortcut. Turn off to verify Apple Maps before restoring manually. Switch resets whenever this screen is reopened.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(RoamPalette.muted)
+                }
+            }
+            .tint(RoamPalette.turquoise)
+            .disabled(autoStartArmed || pendingRestoreHandoff != nil)
             if let selected = session.pin {
                 Text(String(format: "Armed destination: %.5f, %.5f", selected.latitude, selected.longitude))
                     .font(.system(size: 11, design: .monospaced))
@@ -293,6 +347,40 @@ struct OfflineStartupGuideView: View {
                     .foregroundStyle(RoamPalette.muted)
             }
 
+            if autoStartAcceptedLocally && network.offlineObserved && !restoreRequested {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("TELEPORT ACCEPTED — RESTORE CELLULAR", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(RoamPalette.turquoise)
+                    Text("Apple Maps verification is separate from the API result. You can restore mobile data when ready; Roam will keep the current simulated location.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(RoamPalette.muted)
+                    Button(action: runDataOnShortcut) {
+                        Label("Restore mobile data now", systemImage: "antenna.radiowaves.left.and.right")
+                            .font(.system(size: 14, weight: .bold))
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(RoamPalette.turquoise)
+                    .disabled(pendingRestoreHandoff != nil)
+                    if pendingRestoreHandoff != nil {
+                        Button("Cancel automatic restore") {
+                            pendingRestoreHandoff = nil
+                            restoreFeedback = "Automatic restore cancelled; use the manual restore button when ready."
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .padding(12)
+                .background(RoamPalette.turquoise.opacity(0.09), in: RoundedRectangle(cornerRadius: 13))
+            }
+            if restoreRequested || restoreReturnedToApp {
+                Label(restoreFeedback, systemImage: network.cellularPathObserved ? "antenna.radiowaves.left.and.right" : "info.circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(network.cellularPathObserved && restoreReturnedToApp ? RoamPalette.turquoise : RoamPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Button(action: runDataOnShortcut) {
                 Label("Restore mobile data — Run ‘Roam Data On’", systemImage: "antenna.radiowaves.left.and.right")
                     .font(.system(size: 13, weight: .bold))
@@ -301,6 +389,64 @@ struct OfflineStartupGuideView: View {
             .buttonStyle(.bordered)
             Text("Restore mobile data even if teleport fails. If a Shortcut is missing, use iPhone Settings → Mobile Data. Roam cannot verify or silently change the cellular toggle.")
                 .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
+        }
+        .padding(15)
+        .roamSurface(cornerRadius: 20)
+    }
+
+    // A few local, aggregate counters make repeated test runs comparable.
+    // Their numbers are not claims of Apple Maps verification or actual 5G availability.
+    private var reliabilityCard: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            Label("STARTUP RELIABILITY · v0.26", systemImage: "chart.bar.xaxis")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(RoamPalette.turquoise)
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Starts")
+                        .foregroundStyle(RoamPalette.muted)
+                    Text("\(oneTapStarts)").font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+                Spacer()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("API accepted")
+                        .foregroundStyle(RoamPalette.muted)
+                    Text("\(oneTapAccepted)").font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(RoamPalette.turquoise)
+                }
+                Spacer()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("API failed")
+                        .foregroundStyle(RoamPalette.muted)
+                    Text("\(oneTapFailed)").font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+            }
+            .font(.system(size: 11))
+            Text("Restore Shortcut launches: \(restoreRequests) · Cellular-path returns: \(cellularPathReturns)")
+                .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
+            Text("Counts are stored only on this iPhone. An accepted API command is not independent Apple Maps verification; a cellular network path does not prove the radio switch state.")
+                .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
+            Button("Reset reliability counters", role: .destructive) {
+                oneTapStarts = 0
+                oneTapAccepted = 0
+                oneTapFailed = 0
+                restoreRequests = 0
+                cellularPathReturns = 0
+            }
+            .font(.system(size: 12))
+            .buttonStyle(.bordered)
+            .disabled(autoStartArmed || pendingRestoreHandoff != nil)
+            Divider().overlay(RoamPalette.muted.opacity(0.3))
+            Label("Quick recovery", systemImage: "cross.case")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+            Text("If offline startup fails, leave the retained session alone. Check VPN connected, pairing file available and both radios off. Retry the normal Teleport button. If VPN disconnected, restore cellular first, reconnect the original LocalDevVPN, then repeat the one-tap sequence. The Restore Mobile Data button remains available even on failures.")
+                .font(.system(size: 12))
                 .foregroundStyle(RoamPalette.muted)
         }
         .padding(15)
@@ -325,6 +471,13 @@ struct OfflineStartupGuideView: View {
         leftAppAfterArming = false
         returnedAfterArming = false
         autoStartAcceptedLocally = false
+        pendingRestoreHandoff = nil
+        restoreRequested = false
+        restoreLeftApp = false
+        restoreReturnedToApp = false
+        cellularReturnRecorded = false
+        restoreFeedback = "No restore requested yet"
+        oneTapStarts += 1
         oneTapFeedback = "Opening ‘Roam Data Off’… Return to Roam with cellular OFF."
         guard let url = shortcutURL(named: "Roam Data Off") else {
             cancelAutoStart("Could not construct Shortcuts URL; use manual start")
@@ -340,19 +493,65 @@ struct OfflineStartupGuideView: View {
     }
 
     private func runDataOnShortcut() {
-        // Safety: never leave a pending automatic teleport while restoring data.
+        // Safety: never allow a pending GPS teleport or a delayed duplicate restore
+        // to remain armed when the user explicitly requests cellular restoration.
         if autoStartArmed { cancelAutoStart("Automatic teleport cancelled before restoring cellular") }
-        oneTapFeedback = "Opening ‘Roam Data On’… Confirm mobile data is restored in iPhone Settings."
+        pendingRestoreHandoff = nil
+        restoreRequested = true
+        restoreLeftApp = false
+        restoreReturnedToApp = false
+        restoreFeedback = "Opening ‘Roam Data On’… confirm cellular service returns."
         guard let url = shortcutURL(named: "Roam Data On") else {
-            oneTapFeedback = "Could not create the restore link. Use Settings → Mobile Data → On."
+            restoreRequested = false
+            restoreFeedback = "Could not create the restore link. Use Settings → Mobile Data → On."
             return
         }
         UIApplication.shared.open(url, options: [:]) { opened in
-            if !opened {
-                DispatchQueue.main.async {
-                    oneTapFeedback = "Shortcuts could not open. Restore Mobile Data manually in Settings."
+            DispatchQueue.main.async {
+                if opened {
+                    restoreRequests += 1
+                } else {
+                    restoreRequested = false
+                    restoreFeedback = "Shortcuts could not open. Restore Mobile Data manually in Settings."
                 }
             }
+        }
+    }
+
+    /// The app cannot read the actual cellular radio toggle. On a return from
+    /// Shortcuts we only note that NWPathMonitor saw a cellular route; users
+    /// should verify mobile service and GPS in their other apps.
+    private func observeRestoreReturn() {
+        guard restoreRequested, restoreReturnedToApp else { return }
+        if network.cellularPathObserved {
+            restoreFeedback = "Cellular network path observed after restore; verify mobile service and Apple Maps."
+            if !cellularReturnRecorded {
+                cellularReturnRecorded = true
+                cellularPathReturns += 1
+            }
+        } else {
+            restoreFeedback = "Returned to Roam; cellular path not yet observed. Check the Data On Shortcut or iPhone Settings."
+        }
+    }
+
+    /// Experimental optional second Shortcuts hand-off. Only after a user-armed
+    /// one-shot teleport and an API-accepted result. Cancels if the guide closes,
+    /// the app becomes inactive, a second start begins, or the user cancels.
+    private func scheduleAutoRestoreIfRequested() {
+        guard autoRestoreForThisStart, autoStartAcceptedLocally, network.offlineObserved else { return }
+        let token = UUID()
+        pendingRestoreHandoff = token
+        oneTapFeedback = "Teleport API accepted. Automatic cellular restore is armed; you can cancel below."
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            guard pendingRestoreHandoff == token else { return }
+            guard scenePhase == .active, autoStartAcceptedLocally,
+                  network.offlineObserved, !autoStartArmed, !restoreRequested else {
+                pendingRestoreHandoff = nil
+                restoreFeedback = "Automatic restore not launched; use the manual restore button when ready."
+                return
+            }
+            pendingRestoreHandoff = nil
+            runDataOnShortcut()
         }
     }
 
@@ -391,9 +590,14 @@ struct OfflineStartupGuideView: View {
         session.teleport(to: coordinate, pairing: pairing)
         autoStartAcceptedLocally = session.lastTeleportResult.hasPrefix("Initial teleport sent") ||
             session.lastTeleportResult.hasPrefix("Persistent teleport sent")
-        oneTapFeedback = autoStartAcceptedLocally
-            ? "One-shot teleport request accepted. Restore mobile data when ready."
-            : "Teleport request failed: \(session.lastTeleportResult). Check LocalDevVPN and retry manually."
+        if autoStartAcceptedLocally {
+            oneTapAccepted += 1
+            oneTapFeedback = "One-shot teleport request accepted. Restore mobile data when ready."
+            scheduleAutoRestoreIfRequested()
+        } else {
+            oneTapFailed += 1
+            oneTapFeedback = "Teleport request failed: \(session.lastTeleportResult). Check LocalDevVPN and retry manually."
+        }
     }
 
     private func refresh() {
@@ -440,6 +644,7 @@ private final class OfflineStartupNetworkObserver: ObservableObject {
     @Published private(set) var pathDescription = "Checking…"
     @Published private(set) var offlineObserved = false
     @Published private(set) var wifiPathObserved = false
+    @Published private(set) var cellularPathObserved = false
     @Published private(set) var hasCheckedPath = false
 
     private let monitor = NWPathMonitor()
@@ -462,6 +667,7 @@ private final class OfflineStartupNetworkObserver: ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 self?.offlineObserved = isOffline
                 self?.wifiPathObserved = usesWiFi
+                self?.cellularPathObserved = path.status == .satisfied && path.usesInterfaceType(.cellular)
                 self?.pathDescription = label
                 self?.hasCheckedPath = true
             }
