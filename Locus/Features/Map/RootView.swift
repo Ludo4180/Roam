@@ -1,6 +1,7 @@
 import SwiftUI
 import CoreLocation
 import NetworkExtension
+import UIKit
 
 // Roam v0.5: a branded interface over the original, unchanged GPS engine.
 struct RootView: View {
@@ -10,6 +11,8 @@ struct RootView: View {
     @State private var showSettings = false
     @State private var showPlaces = false
     @State private var showOfflineStartupGuide = false
+    @State private var showCommandCenter = false
+    @State private var openGuideAfterCommandCenter = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -19,7 +22,8 @@ struct RootView: View {
             BottomControlsView(
                 showSettings: $showSettings,
                 showPlaces: $showPlaces,
-                showOfflineStartupGuide: $showOfflineStartupGuide
+                showOfflineStartupGuide: $showOfflineStartupGuide,
+                showCommandCenter: $showCommandCenter
             )
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
@@ -28,6 +32,21 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showPlaces) { PlacesView() }
         .sheet(isPresented: $showOfflineStartupGuide) { OfflineStartupGuideView() }
+        .sheet(isPresented: $showCommandCenter, onDismiss: {
+            // A single sheet at a time avoids losing the proven Cold Start
+            // state when switching from the command centre to its guide.
+            if openGuideAfterCommandCenter {
+                openGuideAfterCommandCenter = false
+                showOfflineStartupGuide = true
+            }
+        }) {
+            RoamCommandCenterView(openStartupGuide: {
+                openGuideAfterCommandCenter = true
+                showCommandCenter = false
+            })
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background: session.applicationEnteredBackground()
@@ -109,8 +128,15 @@ struct StatusBarView: View {
     }
 
     private var detailText: String {
+        // A live retained session is more meaningful than a momentary VPN
+        // interface observation. Do not imply that losing a utun candidate
+        // by itself means a working simulation has stopped.
+        if isActive {
+            return tunnelConnected
+                ? "GPS session active · verify in Apple Maps"
+                : "GPS session active · VPN route unverified · check Apple Maps"
+        }
         if !tunnelConnected { return "VPN interface not observed — tap to check LocalDevVPN" }
-        if isActive { return "Virtual movement enabled while the session remains active" }
         return "VPN-like interface seen • developer tunnel NOT verified"
     }
 
@@ -177,6 +203,7 @@ struct BottomControlsView: View {
     @Binding var showSettings: Bool
     @Binding var showPlaces: Bool
     @Binding var showOfflineStartupGuide: Bool
+    @Binding var showCommandCenter: Bool
     @State private var confirmEndSimulation = false
     @State private var showMovementDiagnostics = false
     @State private var controlsMinimized = false
@@ -204,17 +231,15 @@ struct BottomControlsView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Expand movement controls")
 
-            Button {
-                showMovementDiagnostics = true
-            } label: {
-                Image(systemName: "waveform.path.ecg")
+            Button { showCommandCenter = true } label: {
+                Image(systemName: "square.grid.2x2.fill")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(RoamPalette.turquoise)
                     .frame(width: 40, height: 42)
                     .background(Color.white.opacity(0.06), in: Capsule())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Open GPS movement diagnostics")
+            .accessibilityLabel("Open Roam command centre")
 
             Button { showOfflineStartupGuide = true } label: {
                 Image(systemName: "bolt.horizontal.circle.fill")
@@ -320,6 +345,27 @@ struct BottomControlsView: View {
                         modeButton(mode)
                     }
                 }
+
+                Button {
+                    showCommandCenter = true
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "square.grid.2x2.fill")
+                        Text("Command Centre")
+                        Spacer()
+                        Text(session.isSpoofing ? "Location active" : "Start · Move · Recover")
+                            .font(.system(size: 10))
+                            .foregroundStyle(RoamPalette.muted)
+                        Image(systemName: "chevron.right")
+                    }
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(RoamPalette.turquoise)
+                    .padding(12)
+                    .background(RoamPalette.electricBlue.opacity(0.12),
+                                in: RoundedRectangle(cornerRadius: 13))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open Roam command centre")
 
                 Rectangle()
                     .fill(RoamPalette.border)
@@ -470,7 +516,7 @@ struct BottomControlsView: View {
                             }
                         }
                     }
-                    Text("v0.24: The control header stays visible while you scroll. Tap Minimise to select a new map destination; Expand for joystick and 20/30/60/90/120/300s trials. Background execution can end early.")
+                    Text("The control header stays visible while you scroll. Tap Minimise to select a new map destination; Expand for joystick and 20/30/60/90/120/300s trials. Background execution can end early.")
                         .font(.system(size: 10))
                         .foregroundStyle(RoamPalette.muted)
                 }
@@ -636,7 +682,7 @@ struct BottomControlsView: View {
             }
             Button("Keep Simulation", role: .cancel) { }
         } message: {
-            Text("This clears the simulated GPS position. For a new cellular start, keep LocalDevVPN connected and use the Wi-Fi-free offline startup guide.")
+            Text("This clears the simulated GPS position. To start again without Wi-Fi, use Cold Start with the installed LocalDevVPN and your iPhone Shortcut.")
         }
     }
 
@@ -681,6 +727,348 @@ struct BottomControlsView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(accessibility)
     }
+}
+
+// v0.29: A consolidated, presentation-only command surface. The existing
+// retained GPS handle, Cold Start state machine and background cruise engine
+// remain in their original owners. This view NEVER silently changes radios,
+// VPN profiles or pairing data.
+private struct RoamCommandCenterView: View {
+    @EnvironmentObject private var session: SpoofSession
+    @EnvironmentObject private var pairing: PairingStore
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    let openStartupGuide: () -> Void
+
+    @State private var vpnCandidateVisible = LocalDevVPN.tunnelCandidate != nil
+    @State private var confirmEndSimulation = false
+    @State private var confirmLongCruise = false
+    @State private var copiedSummary = false
+
+    private var active: Bool { session.isSpoofing }
+    private var destinationReady: Bool { session.pin != nil }
+    private var canTeleport: Bool {
+        destinationReady && pairing.hasPairingFile && !session.isBusy
+    }
+    private var canStartCruise: Bool {
+        active && !session.isBusy && !session.cruiseActive
+    }
+    private var stateDescription: String {
+        switch session.status {
+        case .idle: return "No GPS simulation running"
+        case .connecting: return "Preparing developer location"
+        case .active: return "GPS simulation active · verify in Apple Maps"
+        case .reconnecting: return "Developer session reconnecting"
+        case .dropped: return "Developer session interrupted · use Recovery"
+        }
+    }
+    private var stateSymbol: String {
+        switch session.status {
+        case .active: return "checkmark.circle.fill"
+        case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
+        case .dropped: return "exclamationmark.triangle.fill"
+        case .idle: return "location.circle.fill"
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    headerCard
+                    actionsCard
+                    movementCard
+                    recoveryCard
+                    connectionCard
+                }
+                .padding(.horizontal, 17)
+                .padding(.top, 15)
+                .padding(.bottom, 30)
+            }
+            .background(RoamPalette.background.ignoresSafeArea())
+            .navigationTitle("Command Centre")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(RoamPalette.turquoise)
+                }
+            }
+            .preferredColorScheme(.dark)
+        }
+        .onAppear(perform: refreshVPN)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshVPN() }
+        }
+        .confirmationDialog("End GPS simulation?", isPresented: $confirmEndSimulation,
+                            titleVisibility: .visible) {
+            Button("End Simulation", role: .destructive) {
+                session.stop(pairing: pairing)
+            }
+            Button("Keep Simulation", role: .cancel) { }
+        } message: {
+            Text("This removes the simulated location. You can keep the current GPS session running by choosing Cancel.")
+        }
+        .confirmationDialog("Start 5-minute background cruise?", isPresented: $confirmLongCruise,
+                            titleVisibility: .visible) {
+            Button("Start 5-minute trial") {
+                guard canStartCruise else { return }
+                session.startBackgroundCruise(duration: 300, pairing: pairing)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This finite experiment may finish early if iOS suspends the app. Apple Maps observation is the independent movement check.")
+        }
+    }
+
+    private var headerCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                RoamBrandMark(size: 43)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("ROAM · v0.29")
+                        .font(.system(size: 11, weight: .bold))
+                        .tracking(1.6)
+                        .foregroundStyle(RoamPalette.turquoise)
+                    Text("Be anywhere.")
+                        .font(.system(size: 23, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+                Spacer()
+                Image(systemName: stateSymbol)
+                    .font(.system(size: 23, weight: .semibold))
+                    .foregroundStyle(active ? RoamPalette.turquoise : LocusTheme.statusWarn)
+            }
+            Text(stateDescription)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+            Text("Developer API status is not independent proof of the location seen in Apple Maps.")
+                .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
+        }
+        .padding(17)
+        .roamSurface(cornerRadius: 22)
+    }
+
+    private var actionsCard: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            sectionTitle("GET GOING", symbol: "bolt.fill")
+            Button(action: openStartupGuide) {
+                HStack(spacing: 10) {
+                    Image(systemName: "bolt.horizontal.circle.fill")
+                        .font(.system(size: 20))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Cold Start / Wi-Fi-free setup")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("Connect LocalDevVPN via Shortcuts, then teleport")
+                            .font(.system(size: 11))
+                            .opacity(0.84)
+                    }
+                    Spacer(minLength: 3)
+                    Image(systemName: "chevron.right")
+                }
+                .foregroundStyle(RoamPalette.background)
+                .padding(13)
+                .background(RoamPalette.primaryGradient,
+                            in: RoundedRectangle(cornerRadius: 15))
+            }
+            .buttonStyle(.plain)
+            HStack(spacing: 10) {
+                Button {
+                    guard let pin = session.pin else { return }
+                    session.teleport(to: pin, pairing: pairing)
+                } label: {
+                    Label(active ? "Re-teleport" : "Teleport", systemImage: "location.north.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(maxWidth: .infinity, minHeight: 46)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(RoamPalette.turquoise)
+                .disabled(!canTeleport)
+                Button { dismiss() } label: {
+                    Label("Select pin", systemImage: "mappin.and.ellipse")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(maxWidth: .infinity, minHeight: 46)
+                }
+                .buttonStyle(.bordered)
+            }
+            Text(!destinationReady ? "Choose a destination on the map before teleporting."
+                 : !pairing.hasPairingFile ? "Pairing file missing. Import it in Settings before starting."
+                 : "A destination is selected. A fresh start on cellular still uses the assisted offline procedure.")
+                .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
+            if active {
+                Text(session.lastTeleportResult)
+                    .font(.system(size: 11))
+                    .foregroundStyle(RoamPalette.muted)
+                    .lineLimit(3)
+            }
+        }
+        .padding(15)
+        .roamSurface(cornerRadius: 20)
+    }
+
+    private var movementCard: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            sectionTitle("MOVEMENT", symbol: "figure.walk.motion")
+            HStack(spacing: 10) {
+                Button {
+                    session.startBackgroundCruise(duration: 20, pairing: pairing)
+                } label: {
+                    Label("20-second cruise", systemImage: "arrow.up")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(RoamPalette.electricBlue)
+                .disabled(!canStartCruise)
+                Button { confirmLongCruise = true } label: {
+                    Label("5-minute cruise", systemImage: "timer")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!canStartCruise)
+            }
+            if session.cruiseActive {
+                HStack(spacing: 7) {
+                    Image(systemName: "arrow.up.forward.circle.fill")
+                        .foregroundStyle(RoamPalette.turquoise)
+                    Text("Cruise running · \(session.cruiseSecondsRemaining)s remaining")
+                        .font(.system(size: 12, weight: .semibold))
+                    Spacer(minLength: 0)
+                    Button("Stop movement") { session.stopCruise() }
+                        .font(.system(size: 11, weight: .semibold))
+                        .buttonStyle(.bordered)
+                }
+            }
+            HStack(spacing: 10) {
+                Button {
+                    session.pauseMovement()
+                } label: {
+                    Label("Pause movement", systemImage: "pause.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 42)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!active || session.isBusy)
+                Button { confirmEndSimulation = true } label: {
+                    Label("End GPS session", systemImage: "stop.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 42)
+                }
+                .buttonStyle(.bordered)
+                .tint(LocusTheme.danger)
+                .disabled(!active || session.isBusy)
+            }
+            Text("Cruises are finite experiments and can end early when iOS limits background execution. Check Apple Maps independently.")
+                .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
+        }
+        .padding(15)
+        .roamSurface(cornerRadius: 20)
+    }
+
+    private var recoveryCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("RECOVERY", symbol: "cross.case.fill")
+            Text("If a new connection fails, restore mobile data first. Keep your pairing file and any working GPS session. Never reset the VPN as a first step.")
+                .font(.system(size: 12))
+                .foregroundStyle(RoamPalette.muted)
+            HStack(spacing: 9) {
+                Button(action: openStartupGuide) {
+                    Label("Startup & Data On", systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 43)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(RoamPalette.electricBlue)
+                Button(action: LocalDevVPN.openOrInstall) {
+                    Label("Open LocalDevVPN", systemImage: "shield.lefthalf.filled")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 43)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(15)
+        .roamSurface(cornerRadius: 20)
+    }
+
+    private var connectionCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("CONNECTION CHECKS", symbol: "checkmark.shield")
+            statusRow("Pairing file", detail: pairing.hasPairingFile ? "Present" : "Missing")
+            statusRow("Local VPN route", detail: vpnCandidateVisible ? "Candidate observed · not authenticated" : "No matching interface observed")
+            statusRow("Developer GPS handle", detail: LocationEngine.isSessionActive ? "Retained" : "Not retained")
+            statusRow("Engine", detail: session.status.label)
+            HStack(spacing: 12) {
+                Button {
+                    refreshVPN()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                Button {
+                    UIPasteboard.general.string = safeSummary
+                    copiedSummary = true
+                } label: {
+                    Label(copiedSummary ? "Copied" : "Copy safe summary", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.bordered)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            Text("No destination coordinates, tunnel addresses, pairing credentials or device identifiers are included in the copied summary.")
+                .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
+            Divider().overlay(RoamPalette.border)
+            Text("Independence research: a built-in packet tunnel would need Apple's Network Extension entitlement and a compatible provisioning profile. Roam currently uses the installed LocalDevVPN and user-approved Shortcuts; a VPN-free developer connection is not yet validated.")
+                .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
+        }
+        .padding(15)
+        .roamSurface(cornerRadius: 20)
+    }
+
+    private var safeSummary: String {
+        [
+            "Roam v0.29 — Command Centre summary",
+            "UTC: \(ISO8601DateFormatter().string(from: Date()))",
+            "GPS session active: \(session.isSpoofing)",
+            "Engine state: \(session.status.label)",
+            "Developer GPS handle retained: \(LocationEngine.isSessionActive)",
+            "Pairing file present: \(pairing.hasPairingFile)",
+            "Local VPN interface candidate observed (unverified): \(vpnCandidateVisible)",
+            "Movement API accepted: \(session.movementAccepted)",
+            "Movement API failed: \(session.movementFailed)",
+            "Background trial API accepted: \(session.backgroundTrialAccepted)",
+            "Background trial API failed: \(session.backgroundTrialFailed)",
+            "Location confirmation is a separate manual Apple Maps check.",
+            "No coordinates, addresses, endpoints, pairing secrets or device identifiers included."
+        ].joined(separator: "\n")
+    }
+
+    private func sectionTitle(_ title: String, symbol: String) -> some View {
+        Label(title, systemImage: symbol)
+            .font(.system(size: 11, weight: .bold))
+            .tracking(1.1)
+            .foregroundStyle(RoamPalette.turquoise)
+    }
+
+    private func statusRow(_ title: String, detail: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.system(size: 12))
+                .foregroundStyle(RoamPalette.muted)
+            Spacer(minLength: 8)
+            Text(detail)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func refreshVPN() { vpnCandidateVisible = LocalDevVPN.tunnelCandidate != nil }
 }
 
 // Retained for other screens that may use the original helper.

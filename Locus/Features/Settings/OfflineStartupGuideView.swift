@@ -2,7 +2,7 @@ import SwiftUI
 import Network
 import CoreLocation
 
-/// v0.28: stability and interface refinement of the verified v0.27 Cold Start workflow.
+/// v0.29: Command Centre companion to the independently tested v0.28 Cold Start workflow.
 /// A user-built Shortcut may first connect the EXISTING LocalDevVPN VPN profile,
 /// then turn off cellular and return here. Only after offline route checks pass
 /// will Roam send one GPS command. No VPN entitlement, silent network changes,
@@ -137,7 +137,7 @@ struct OfflineStartupGuideView: View {
                             Text("Roam Quick Start")
                                 .font(.system(size: 23, weight: .bold, design: .rounded))
                                 .foregroundStyle(.white)
-                            Text("v0.28 · Cold Start & connection assistant")
+                            Text("v0.29 · Cold Start & connection assistant")
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(RoamPalette.muted)
                         }
@@ -445,7 +445,7 @@ struct OfflineStartupGuideView: View {
             }
             .buttonStyle(.plain)
             if showColdStartHelp {
-                Text("In Shortcuts create a third shortcut with EXACT name ‘Roam Cold Start’. Add these actions in order:\n\n1. Set VPN → Connect → select the configured LocalDevVPN VPN profile (choose it from the VPN picker, not typed text).\n2. Wait → 5 seconds.\n3. Set Cellular Data → Off.\n4. Open App → your NEW Roam v0.28.\n\nTest the VPN action separately first: from VPN Disconnected and cellular ON, run Set VPN and confirm Settings → VPN shows Connected. If the VPN is not selectable, use Open LocalDevVPN below instead. Keep existing ‘Roam Data Off’ and ‘Roam Data On’ Shortcuts unchanged. Do NOT add Disconnect VPN.")
+                Text("In Shortcuts create a third shortcut with EXACT name ‘Roam Cold Start’. Add these actions in order:\n\n1. Set VPN → Connect → select the configured LocalDevVPN VPN profile (choose it from the VPN picker, not typed text).\n2. Wait → 5 seconds.\n3. Set Cellular Data → Off.\n4. Open App → your NEW Roam v0.29.\n\nTest the VPN action separately first: from VPN Disconnected and cellular ON, run Set VPN and confirm Settings → VPN shows Connected. If the VPN is not selectable, use Open LocalDevVPN below instead. Keep existing ‘Roam Data Off’ and ‘Roam Data On’ Shortcuts unchanged. Do NOT add Disconnect VPN.")
                     .font(.system(size: 12))
                     .foregroundStyle(RoamPalette.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -689,7 +689,7 @@ struct OfflineStartupGuideView: View {
 
     private var startupDiagnosticsSummary: String {
         [
-            "Roam v0.28 — user-copied startup summary",
+            "Roam v0.29 — user-copied startup summary",
             "Timestamp (UTC): \(ISO8601DateFormatter().string(from: Date()))",
             "Network path: \(network.pathDescription)",
             "Pairing file present: \(pairing.hasPairingFile)",
@@ -714,7 +714,7 @@ struct OfflineStartupGuideView: View {
     // Their numbers are not claims of Apple Maps verification or actual 5G availability.
     private var reliabilityCard: some View {
         VStack(alignment: .leading, spacing: 11) {
-            Label("STARTUP RELIABILITY · v0.28", systemImage: "chart.bar.xaxis")
+            Label("STARTUP RELIABILITY · v0.29", systemImage: "chart.bar.xaxis")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(RoamPalette.turquoise)
             HStack {
