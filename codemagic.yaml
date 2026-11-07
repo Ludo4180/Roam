@@ -35,7 +35,7 @@ workflows:
           BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")
           echo "Built Roam $VERSION ($BUILD); expecting Roam 0.27.0 (27)"
           test "$VERSION" = "0.27.0"
-          test "$BUILD" = "26"
+          test "$BUILD" = "27"
           test -f "$APP/Roam"
       - name: Package unsigned IPA for signing in iLoader
         script: |
