@@ -811,7 +811,7 @@ private enum RoamPairingHandshakeProbe {
 /// Compare BSD TCP connections with and without IP_BOUND_IF (Darwin socket
 /// option 25). This does NOT alter the idevice FFI connection or any VPN route.
 /// All operations are made on a background queue and time out after 5 seconds.
-private enum RoamBoundTCPProbe {
+enum RoamBoundTCPProbe {
     static func check(host: String, port: UInt16, interface: String?) -> String {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return "socket failed: \(explain(errno))" }

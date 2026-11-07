@@ -120,13 +120,13 @@ struct SettingsView: View {
                     Text("A VPN candidate is not proof LocalDevVPN is connected. For the confirmed Wi-Fi-free method, see the offline startup guide. Turn mobile data off temporarily for a fresh start while the VPN remains connected.")
                 }
 
-                Section("WI-FI-FREE STARTUP — v0.24") {
+                Section("WI-FI-FREE STARTUP — v0.27") {
                     Button {
                         showOfflineStartupGuide = true
                     } label: {
                         Label("Open guided offline startup", systemImage: "bolt.horizontal.circle.fill")
                     }
-                    Text("With LocalDevVPN already connected, temporarily disable both Wi-Fi and mobile data, teleport, then restore cellular. This guide never changes the network itself.")
+                    Text("Choose proven VPN-connected One-Tap startup or try the experimental Cold Start Shortcut that connects LocalDevVPN first. Roam never changes VPN settings or the cellular radio directly.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

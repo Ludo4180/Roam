@@ -2,10 +2,11 @@ import SwiftUI
 import Network
 import CoreLocation
 
-/// v0.26: opt-in Shortcuts-assisted Wi-Fi-free startup and explicit auto-restore hand-off.
-/// Shortcuts are created and run by the user. Roam can arm one finite,
-/// foreground-only teleport after the user returns while the network is offline.
-/// Never silently changes radios, resets the VPN, or clears a retained GPS handle.
+/// v0.27: proven v0.26 workflow + experimental start with LocalDevVPN disconnected.
+/// A user-built Shortcut may first connect the EXISTING LocalDevVPN VPN profile,
+/// then turn off cellular and return here. Only after offline route checks pass
+/// will Roam send one GPS command. No VPN entitlement, silent network changes,
+/// automatic re-pairing, or changes to the stable location engine.
 struct OfflineStartupGuideView: View {
     @EnvironmentObject private var session: SpoofSession
     @EnvironmentObject private var pairing: PairingStore
@@ -16,6 +17,18 @@ struct OfflineStartupGuideView: View {
     @State private var vpnCandidateVisible = LocalDevVPN.tunnelCandidate != nil
     @State private var attemptedFromGuide = false
     @State private var showShortcutsHelp = false
+    @State private var showAdvanced = false
+    @State private var showColdStartHelp = false
+
+    // v0.27 experimental path: LocalDevVPN was initially disconnected.
+    // These flags never persist, so relaunching Roam cannot trigger a teleport.
+    @State private var coldStartArmed = false
+    @State private var coldProbeApproved = false
+    @State private var coldProbeRunning = false
+    @State private var coldProbeNextAttemptAt = Date.distantPast
+    @State private var coldProbeGeneration = UUID()
+    @State private var coldProbeFeedback = "Not attempted"
+    @State private var lastColdStartSuccess = false
 
     // One-shot, *in-memory only* request. It is never restored after app launch.
     @State private var vpnCheckedByUser = false
@@ -45,6 +58,9 @@ struct OfflineStartupGuideView: View {
     @AppStorage("roam.v026.oneTapFailed") private var oneTapFailed = 0
     @AppStorage("roam.v026.restoreRequests") private var restoreRequests = 0
     @AppStorage("roam.v026.cellularPathReturns") private var cellularPathReturns = 0
+    @AppStorage("roam.v027.coldStarts") private var coldStarts = 0
+    @AppStorage("roam.v027.coldAccepted") private var coldAccepted = 0
+    @AppStorage("roam.v027.coldFailures") private var coldFailures = 0
     private let autoStartTimeout: TimeInterval = 90
 
     private var canArmAutoStart: Bool {
@@ -53,16 +69,34 @@ struct OfflineStartupGuideView: View {
         !network.wifiPathObserved && !network.offlineObserved && !autoStartArmed
     }
 
+    private var canArmColdStart: Bool {
+        pairing.hasPairingFile && session.pin != nil && !session.isBusy &&
+        !session.isSpoofing && !autoStartArmed && network.hasCheckedPath &&
+        network.cellularPathObserved && !network.wifiPathObserved
+    }
+
     private var retainedHandle: Bool { LocationEngine.isSessionActive }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Start Roam without Wi-Fi")
-                        .font(.system(size: 23, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                    Text("Your confirmed Wi-Fi-free workflow uses a pre-connected LocalDevVPN. v0.26 can optionally run your existing ‘Roam Data On’ Shortcut after an accepted teleport, but only when you explicitly enable it for that attempt.")
+                    HStack(spacing: 12) {
+                        Image(systemName: "location.north.fill")
+                            .font(.system(size: 21, weight: .bold))
+                            .foregroundStyle(RoamPalette.turquoise)
+                            .frame(width: 44, height: 44)
+                            .background(RoamPalette.turquoise.opacity(0.13), in: RoundedRectangle(cornerRadius: 14))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Roam Quick Start")
+                                .font(.system(size: 23, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                            Text("v0.27 · Wi-Fi-free connection assistant")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(RoamPalette.muted)
+                        }
+                    }
+                    Text("Start with your VPN disconnected using the experimental Cold Start, or keep using the proven v0.26 one-tap method. Both require the original LocalDevVPN app; Roam cannot create or control its private VPN configuration directly.")
                         .font(.subheadline)
                         .foregroundStyle(RoamPalette.muted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -91,12 +125,29 @@ struct OfflineStartupGuideView: View {
                     .padding(15)
                     .roamSurface(cornerRadius: 20)
 
+                    coldStartCard
                     oneTapCard
 
-                    reliabilityCard
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { showAdvanced.toggle() }
+                    } label: {
+                        HStack {
+                            Label("Diagnostics, statistics & manual steps", systemImage: "waveform.path.ecg")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(.white)
+                            Spacer()
+                            Image(systemName: showAdvanced ? "chevron.up" : "chevron.down")
+                                .foregroundStyle(RoamPalette.turquoise)
+                        }
+                        .padding(15)
+                        .roamSurface(cornerRadius: 16)
+                    }
+                    .buttonStyle(.plain)
+                    if showAdvanced {
+                      reliabilityCard
 
                     VStack(alignment: .leading, spacing: 12) {
-                        step(1, title: "Connect LocalDevVPN", note: "With mobile data ON, connect the original LocalDevVPN. Check Settings → VPN says Connected. Do not replace the working VPN.")
+                        step(1, title: "Connect LocalDevVPN", note: "With mobile data ON, connect the original LocalDevVPN manually or use the new Cold Start Shortcut. Confirm Settings → VPN says Connected. Do not replace the working VPN.")
                         step(2, title: "Temporarily go offline", note: "In iPhone Settings turn Wi-Fi OFF and Mobile Data OFF. Leave LocalDevVPN connected, then return to Roam.")
                         step(3, title: "Teleport while offline", note: "Select a location on Roam's map. Start Teleport below, or return to the map and use Teleport. Wait for the result.")
                         step(4, title: "Restore cellular", note: "When the teleport succeeds, turn Mobile Data ON again. Keep Wi-Fi OFF and confirm Apple Maps displays the simulated location. Re-teleport normally.")
@@ -208,6 +259,7 @@ struct OfflineStartupGuideView: View {
                     }
                     .padding(15)
                     .roamSurface(cornerRadius: 20)
+                    } // expanded diagnostics and manual steps
                 }
                 .padding(16)
             }
@@ -267,6 +319,101 @@ struct OfflineStartupGuideView: View {
         }
     }
 
+    /// Optional experimental workflow, starts even if the original LocalDevVPN
+    /// profile is currently disconnected. The SHORTCUT (not Roam) requests VPN On.
+    private var coldStartCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("START WITH VPN DISCONNECTED", systemImage: "power.circle.fill")
+                    .font(.system(size: 12, weight: .bold))
+                    .tracking(0.6)
+                    .foregroundStyle(.white)
+                Spacer()
+                Text("EXPERIMENTAL")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(LocusTheme.statusWarn)
+            }
+            Text("Cold Start")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+            Text("No need to connect LocalDevVPN beforehand. A third user-created Shortcut connects its existing VPN profile while cellular is ON, waits for it, switches data OFF, and returns here. Roam checks the offline tunnel route before one teleport.")
+                .font(.system(size: 12))
+                .foregroundStyle(RoamPalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            if network.wifiPathObserved {
+                Label("Turn Wi-Fi OFF in Settings before starting.", systemImage: "wifi.exclamationmark")
+                    .font(.system(size: 12))
+                    .foregroundStyle(LocusTheme.statusWarn)
+            } else if network.offlineObserved {
+                Label("Cellular is currently offline. Turn it ON to let Shortcuts connect the VPN first.", systemImage: "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 12))
+                    .foregroundStyle(LocusTheme.statusWarn)
+            } else if network.cellularPathObserved {
+                Label("Cellular route observed · ready for Cold Start setup", systemImage: "checkmark.circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(RoamPalette.turquoise)
+            }
+            if session.isSpoofing {
+                Text("An existing GPS session is active. Use Re-teleport instead of starting a new VPN connection.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(RoamPalette.muted)
+            }
+            Button(action: armAndLaunchColdStart) {
+                Label("Cold Start · Connect VPN & Teleport", systemImage: "bolt.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .frame(maxWidth: .infinity, minHeight: 50)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(RoamPalette.electricBlue)
+            .disabled(!canArmColdStart)
+            if coldStartArmed {
+                Label("Armed for ONE GPS command. VPN route checking is read-only; expires after 90 seconds.", systemImage: "clock")
+                    .font(.system(size: 11))
+                    .foregroundStyle(LocusTheme.statusWarn)
+                Button("Cancel Cold Start", role: .cancel) {
+                    cancelAutoStart("Cold Start cancelled. Turn mobile data back on if necessary.")
+                }
+                .font(.system(size: 12))
+                .buttonStyle(.bordered)
+            }
+            if coldStartArmed || lastColdStartSuccess || coldProbeFeedback != "Not attempted" {
+                Text("Local VPN route: \(coldProbeFeedback)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(lastColdStartSuccess ? RoamPalette.turquoise : RoamPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button {
+                withAnimation { showColdStartHelp.toggle() }
+            } label: {
+                HStack {
+                    Label("Create ‘Roam Cold Start’ Shortcut", systemImage: "square.stack.3d.up")
+                    Spacer()
+                    Image(systemName: showColdStartHelp ? "chevron.up" : "chevron.down")
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(RoamPalette.turquoise)
+            }
+            .buttonStyle(.plain)
+            if showColdStartHelp {
+                Text("In Shortcuts create a third shortcut with EXACT name ‘Roam Cold Start’. Add these actions in order:\n\n1. Set VPN → Connect → select the configured LocalDevVPN VPN profile (choose it from the VPN picker, not typed text).\n2. Wait → 5 seconds.\n3. Set Cellular Data → Off.\n4. Open App → your NEW Roam v0.27.\n\nTest the VPN action separately first: from VPN Disconnected and cellular ON, run Set VPN and confirm Settings → VPN shows Connected. If the VPN is not selectable, use Open LocalDevVPN below instead. Keep existing ‘Roam Data Off’ and ‘Roam Data On’ Shortcuts unchanged. Do NOT add Disconnect VPN.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(RoamPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("Create Shortcut") { openShortcutsCreator() }
+                    Button("Open LocalDevVPN") { LocalDevVPN.openOrInstall() }
+                }
+                .buttonStyle(.bordered)
+                .font(.system(size: 11, weight: .medium))
+            }
+            Text("The route check confirms only local TCP reachability, not VPN ownership or GPS accuracy. If connecting the VPN fails, the auto-teleport won't run. Restore mobile data with the usual Data On button below.")
+                .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
+        }
+        .padding(15)
+        .roamSurface(cornerRadius: 20)
+    }
+
     // Kept outside the main ScrollView expression to limit SwiftUI type-check load.
     private var oneTapCard: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -276,11 +423,11 @@ struct OfflineStartupGuideView: View {
                     .tracking(0.8)
                     .foregroundStyle(RoamPalette.turquoise)
                 Spacer()
-                Text("NEW · v0.26")
+                Text("TESTED · v0.26")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(RoamPalette.muted)
             }
-            Text("With Wi-Fi OFF and LocalDevVPN already connected, one tap runs your ‘Roam Data Off’ Shortcut. On return offline, Roam sends ONE teleport. Optional auto-restore launches ‘Roam Data On’ only if the GPS API accepts the command.")
+            Text("Proven method: with Wi-Fi OFF and LocalDevVPN already connected, one tap runs your ‘Roam Data Off’ Shortcut. On return offline, Roam sends ONE teleport. Optional auto-restore launches ‘Roam Data On’ only if the GPS API accepts the command.")
                 .font(.system(size: 12))
                 .foregroundStyle(RoamPalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -330,7 +477,7 @@ struct OfflineStartupGuideView: View {
             .disabled(!canArmAutoStart)
 
             if autoStartArmed {
-                Label("Armed for ONE teleport on return, while offline (expires after 90 seconds).", systemImage: "clock.arrow.circlepath")
+                Label(coldStartArmed ? "Cold Start armed: waiting for VPN route, then ONE teleport (90 seconds)." : "Armed for ONE teleport on return, while offline (expires after 90 seconds).", systemImage: "clock.arrow.circlepath")
                     .font(.system(size: 12))
                     .foregroundStyle(LocusTheme.statusWarn)
                 Button("Cancel armed teleport", role: .cancel) { cancelAutoStart("Automatic start cancelled; no teleport sent") }
@@ -399,7 +546,7 @@ struct OfflineStartupGuideView: View {
     // Their numbers are not claims of Apple Maps verification or actual 5G availability.
     private var reliabilityCard: some View {
         VStack(alignment: .leading, spacing: 11) {
-            Label("STARTUP RELIABILITY · v0.26", systemImage: "chart.bar.xaxis")
+            Label("STARTUP RELIABILITY · v0.27", systemImage: "chart.bar.xaxis")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(RoamPalette.turquoise)
             HStack {
@@ -428,6 +575,9 @@ struct OfflineStartupGuideView: View {
             Text("Restore Shortcut launches: \(restoreRequests) · Cellular-path returns: \(cellularPathReturns)")
                 .font(.system(size: 11))
                 .foregroundStyle(RoamPalette.muted)
+            Text("Experimental VPN-off starts: \(coldStarts) · API accepted: \(coldAccepted) · Failed/expired: \(coldFailures)")
+                .font(.system(size: 11))
+                .foregroundStyle(RoamPalette.muted)
             Text("Counts are stored only on this iPhone. An accepted API command is not independent Apple Maps verification; a cellular network path does not prove the radio switch state.")
                 .font(.system(size: 11))
                 .foregroundStyle(RoamPalette.muted)
@@ -437,6 +587,9 @@ struct OfflineStartupGuideView: View {
                 oneTapFailed = 0
                 restoreRequests = 0
                 cellularPathReturns = 0
+                coldStarts = 0
+                coldAccepted = 0
+                coldFailures = 0
             }
             .font(.system(size: 12))
             .buttonStyle(.bordered)
@@ -445,7 +598,7 @@ struct OfflineStartupGuideView: View {
             Label("Quick recovery", systemImage: "cross.case")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(.white)
-            Text("If offline startup fails, leave the retained session alone. Check VPN connected, pairing file available and both radios off. Retry the normal Teleport button. If VPN disconnected, restore cellular first, reconnect the original LocalDevVPN, then repeat the one-tap sequence. The Restore Mobile Data button remains available even on failures.")
+            Text("If Cold Start fails, restore mobile data first; check the configured LocalDevVPN VPN profile and reopen it manually if necessary. Then use the verified v0.26 One-Tap path. Never delete the VPN profile, pairing data or a retained working GPS session during troubleshooting. The Restore Mobile Data button remains available even on failures.")
                 .font(.system(size: 12))
                 .foregroundStyle(RoamPalette.muted)
         }
@@ -465,6 +618,11 @@ struct OfflineStartupGuideView: View {
 
     private func armAndLaunchDataOff() {
         guard canArmAutoStart, let coordinate = session.pin else { return }
+        coldStartArmed = false
+        coldProbeApproved = false
+        coldProbeGeneration = UUID()
+        coldProbeFeedback = "Not attempted"
+        lastColdStartSuccess = false
         autoStartPin = coordinate // Snapshot: never follow a moving pin without consent.
         autoStartArmedAt = Date()
         autoStartArmed = true
@@ -487,6 +645,77 @@ struct OfflineStartupGuideView: View {
             if !opened {
                 DispatchQueue.main.async {
                     cancelAutoStart("Shortcuts did not open. Create ‘Roam Data Off’ or use iPhone Settings.")
+                }
+            }
+        }
+    }
+
+    private func armAndLaunchColdStart() {
+        guard canArmColdStart, let coordinate = session.pin else { return }
+        autoStartPin = coordinate
+        autoStartArmedAt = Date()
+        autoStartArmed = true
+        coldStartArmed = true
+        coldProbeApproved = false
+        coldProbeRunning = false
+        coldProbeNextAttemptAt = .distantPast
+        coldProbeGeneration = UUID()
+        coldProbeFeedback = "Waiting for the VPN to connect and the offline return"
+        lastColdStartSuccess = false
+        leftAppAfterArming = false
+        returnedAfterArming = false
+        autoStartAcceptedLocally = false
+        pendingRestoreHandoff = nil
+        restoreRequested = false
+        restoreLeftApp = false
+        restoreReturnedToApp = false
+        cellularReturnRecorded = false
+        restoreFeedback = "No restore requested yet"
+        oneTapStarts += 1
+        coldStarts += 1
+        oneTapFeedback = "Opening ‘Roam Cold Start’. It should connect the VPN before disabling cellular data."
+        guard let url = shortcutURL(named: "Roam Cold Start") else {
+            failColdStart("Could not create the Shortcuts URL; use the manual setup")
+            return
+        }
+        UIApplication.shared.open(url, options: [:]) { opened in
+            if !opened {
+                DispatchQueue.main.async {
+                    failColdStart("Shortcuts did not open. Create ‘Roam Cold Start’ or use the existing workflow.")
+                }
+            }
+        }
+    }
+
+    private func failColdStart(_ message: String) {
+        if coldStartArmed { coldFailures += 1 }
+        cancelAutoStart(message)
+    }
+
+    /// Read-only local reachability. It runs off the main thread and never touches
+    /// the developer pairing or GPS handle. A matching utun is only a candidate.
+    private func probeColdStartRouteIfNeeded() {
+        guard autoStartArmed, coldStartArmed, !coldProbeRunning,
+              Date() >= coldProbeNextAttemptAt else { return }
+        coldProbeRunning = true
+        coldProbeNextAttemptAt = Date().addingTimeInterval(4)
+        coldProbeFeedback = "Testing VPN peer over the offline route…"
+        let generation = coldProbeGeneration
+        let endpointIP = TunnelConfig.targetIP
+        let endpointPort = TunnelConfig.targetPort
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome = RoamBoundTCPProbe.check(host: endpointIP, port: endpointPort, interface: nil)
+            DispatchQueue.main.async {
+                guard coldProbeGeneration == generation, autoStartArmed,
+                      coldStartArmed else { return }
+                coldProbeRunning = false
+                coldProbeFeedback = outcome
+                if outcome == "TCP connected" {
+                    coldProbeApproved = true
+                    oneTapFeedback = "Offline VPN peer is reachable. Attempting your one authorized teleport…"
+                    checkArmedAutoStart()
+                } else {
+                    oneTapFeedback = "VPN route not reachable yet (\(outcome)). Waiting briefly; if it remains unavailable, restore mobile data."
                 }
             }
         }
@@ -561,6 +790,10 @@ struct OfflineStartupGuideView: View {
     }
 
     private func cancelAutoStart(_ message: String) {
+        coldStartArmed = false
+        coldProbeApproved = false
+        coldProbeRunning = false
+        coldProbeGeneration = UUID() // invalidate any delayed socket callback
         autoStartArmed = false
         leftAppAfterArming = false
         returnedAfterArming = false
@@ -574,15 +807,34 @@ struct OfflineStartupGuideView: View {
     private func checkArmedAutoStart() {
         guard autoStartArmed else { return }
         guard let armedAt = autoStartArmedAt, Date().timeIntervalSince(armedAt) < autoStartTimeout else {
-            cancelAutoStart("The 90-second startup window expired. Start again if needed.")
+            if coldStartArmed { coldFailures += 1 }
+            cancelAutoStart("The 90-second startup window expired. Restore mobile data and try again if needed.")
             return
         }
         guard returnedAfterArming, scenePhase == .active, network.offlineObserved else { return }
         guard !session.isBusy, pairing.hasPairingFile, let coordinate = autoStartPin else { return }
 
+        if coldStartArmed {
+            if session.isSpoofing {
+                failColdStart("An active GPS session was found; Cold Start cancelled to protect the retained connection.")
+                return
+            }
+            guard vpnCandidateVisible else {
+                oneTapFeedback = "Returned offline. Waiting for a VPN interface… If it remains absent, restore mobile data and connect LocalDevVPN manually."
+                return
+            }
+            guard coldProbeApproved else {
+                probeColdStartRouteIfNeeded()
+                return
+            }
+        }
+
+        let wasColdStart = coldStartArmed
         // Disarm BEFORE invoking the location engine. A path/lifecycle update
         // must never result in a second unintended GPS command.
         autoStartArmed = false
+        coldStartArmed = false
+        coldProbeGeneration = UUID()
         autoStartPin = nil
         autoStartArmedAt = nil
         returnedAfterArming = false
@@ -592,11 +844,15 @@ struct OfflineStartupGuideView: View {
             session.lastTeleportResult.hasPrefix("Persistent teleport sent")
         if autoStartAcceptedLocally {
             oneTapAccepted += 1
-            oneTapFeedback = "One-shot teleport request accepted. Restore mobile data when ready."
+            if wasColdStart { coldAccepted += 1; lastColdStartSuccess = true }
+            oneTapFeedback = wasColdStart
+                ? "VPN-off startup: GPS API accepted the teleport. Verify Apple Maps; restore cellular when ready."
+                : "One-shot teleport request accepted. Restore mobile data when ready."
             scheduleAutoRestoreIfRequested()
         } else {
             oneTapFailed += 1
-            oneTapFeedback = "Teleport request failed: \(session.lastTeleportResult). Check LocalDevVPN and retry manually."
+            if wasColdStart { coldFailures += 1 }
+            oneTapFeedback = "Teleport request failed: \(session.lastTeleportResult). Restore mobile data if needed and check LocalDevVPN."
         }
     }
 

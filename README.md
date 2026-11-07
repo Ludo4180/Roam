@@ -29,3 +29,7 @@ Build via the existing Codemagic workflow `roam-ios-unsigned`. Expected file: `r
 - The v0.26 optional hand-off is experimental; normal Shortcuts may show their own system UI. No guarantee of uninterrupted or fully background-automatic execution.
 
 Earlier cellular routing diagnostics and finite background movement experiments remain available in their unchanged source locations.
+
+## Roam v0.27 — Cold Start experiment
+
+See [`ROAM_V0.27_BUILD_AND_TEST.md`](ROAM_V0.27_BUILD_AND_TEST.md) for the optional `Roam Cold Start` Shortcut that requests iOS to connect the installed LocalDevVPN VPN profile before temporarily disabling cellular data. New UI groups tested v0.26 startup, experimental VPN-disconnected startup, and collapsible diagnostics. GPS/paired developer engine remains unchanged. The cold start feature is **not proven until iPhone tests** and still requires the original LocalDevVPN app.
